@@ -278,3 +278,8 @@ danmaku/
 - cron 設定の具体的フォーマット（SKILL.md でどう生成させるか）
 - トレイメニュー項目
 - ログ・履歴機能の要否
+
+## 実装ノート (アプリ別)
+
+- danmaku-gui-linux: [apps/danmaku-gui-linux/IMPLEMENTATION.md](apps/danmaku-gui-linux/IMPLEMENTATION.md) — X11 オーバーレイの実装根拠と分類
+
