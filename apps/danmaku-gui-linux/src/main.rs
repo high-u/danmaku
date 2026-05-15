@@ -108,7 +108,7 @@ fn build_ui(app: &Application) {
     window.connect_map(|win| {
         let Some(surface) = win.surface() else { return };
         send_x11_state_change_above(&surface);
-        move_resize_to_monitor(&surface);
+        move_to_monitor_center(&surface);
     });
 
     // FrameClock 同期の再描画。VSync に合わせて毎フレーム queue_draw する。
@@ -202,9 +202,10 @@ fn send_x11_state_change_above(surface: &gdk::Surface) {
     }
 }
 
-// マップ後に「横幅最大・縦 70%・中央寄せ」位置へ MoveResize する。
-// set_default_size でサイズは既に指定済みなので、ここは主に位置の中央寄せが目的。
-fn move_resize_to_monitor(surface: &gdk::Surface) {
+// マップ後にウィンドウをモニタ中央 (縦方向) へ移動する。
+// サイズは set_default_size で指定済みのため、ここでは位置指定のみ行う。
+// GTK4 には X11 ウィンドウの位置指定 API が無いため Xlib を使う。
+fn move_to_monitor_center(surface: &gdk::Surface) {
     let Some((xdisplay, xid)) = x11_handles(surface) else {
         return;
     };
@@ -217,12 +218,11 @@ fn move_resize_to_monitor(surface: &gdk::Surface) {
         return;
     };
     let geom = monitor.geometry();
-    let w = geom.width();
     let h = (geom.height() as f64 * 0.75) as i32;
     let x = geom.x();
     let y = geom.y() + (geom.height() - h) / 2;
     unsafe {
-        x11::xlib::XMoveResizeWindow(xdisplay, xid, x, y, w as u32, h as u32);
+        x11::xlib::XMoveWindow(xdisplay, xid, x, y);
     }
 }
 
