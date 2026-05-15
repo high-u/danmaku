@@ -24,7 +24,9 @@ fn build_ui(app: &Application) {
 
     // 背景を透明に
     let css = gtk4::CssProvider::new();
-    css.load_from_string("window, window > * { background: transparent; }");
+    // 確認用: ウィンドウ範囲を可視化するため半透明の赤を敷く。
+    // 本番では "background: transparent;" に戻す。
+    css.load_from_string("window { background: rgba(100, 160, 220, 0.08); } window > * { background: transparent; }");
     gtk4::style_context_add_provider_for_display(
         &gdk::Display::default().expect("no display"),
         &css,
@@ -75,38 +77,43 @@ fn build_ui(app: &Application) {
 
     window.set_child(Some(&drawing));
 
-    // モニタサイズを取得してウィンドウを画面いっぱいに
-    if let Some(display) = gdk::Display::default() {
-        let monitors = display.monitors();
-        if let Some(monitor) = monitors.item(0).and_then(|o| o.downcast::<gdk::Monitor>().ok()) {
-            let geom = monitor.geometry();
-            window.set_default_size(geom.width(), geom.height());
+    // 横幅 = モニタ幅, 縦 = モニタ高の 75%, 中央寄せ。
+    // 面積比 75% < 80% なので mutter の auto-maximize 閾値 (work_area * 0.8) を下回り、
+    // MAXIMIZED が付かないため ABOVE が META_LAYER_TOP に乗る。
+    let (target_w, target_h) = match gdk::Display::default()
+        .and_then(|d| d.monitors().item(0))
+        .and_then(|o| o.downcast::<gdk::Monitor>().ok())
+    {
+        Some(m) => {
+            let g = m.geometry();
+            (g.width(), (g.height() as f64 * 0.75) as i32)
         }
-    }
-    window.fullscreen();
+        None => (640, 480),
+    };
+    window.set_default_size(target_w, target_h);
 
+    // realize: X11 ウィンドウが生成された直後 (まだマップされていない)。
+    //   - 空 input region でクリックスルー
+    //   - マップ前の初期 _NET_WM_STATE を XChangeProperty で直接書く (EWMH ar01s05)
     window.connect_realize(|win| {
         let Some(surface) = win.surface() else { return };
-
-        // クリックスルー: 空 input region
         let region = cairo::Region::create();
         surface.set_input_region(Some(&region));
-
-        // マップ前の初期 _NET_WM_STATE を property で書く
         set_x11_initial_wm_state(&surface);
-
-        // マップ後に ClientMessage で ABOVE を明示的に ADD する
-        // (EWMH 仕様: マップ済みウィンドウの state 変更はルートへの ClientMessage)
-        // idle で main loop の手すきに走らせれば、その時点でマップ済み
-        let surface_clone = surface.clone();
-        glib::idle_add_local_once(move || {
-            send_x11_state_change_above(&surface_clone);
-        });
     });
 
-    let drawing_clone = drawing.clone();
-    glib::timeout_add_local(std::time::Duration::from_millis(16), move || {
-        drawing_clone.queue_draw();
+    // map: ウィンドウが実際に表示された (MapNotify 相当)。
+    //   - ABOVE を ADD (EWMH ClientMessage / SubstructureRedirect|Notify)
+    //   - モニタ位置へ MoveResize (中央寄せ)
+    window.connect_map(|win| {
+        let Some(surface) = win.surface() else { return };
+        send_x11_state_change_above(&surface);
+        move_resize_to_monitor(&surface);
+    });
+
+    // FrameClock 同期の再描画。VSync に合わせて毎フレーム queue_draw する。
+    drawing.add_tick_callback(|area, _clock| {
+        area.queue_draw();
         glib::ControlFlow::Continue
     });
 
@@ -140,9 +147,9 @@ fn set_x11_initial_wm_state(surface: &gdk::Surface) {
         let sticky = atom(xdisplay, "_NET_WM_STATE_STICKY");
         let skip_taskbar = atom(xdisplay, "_NET_WM_STATE_SKIP_TASKBAR");
         let skip_pager = atom(xdisplay, "_NET_WM_STATE_SKIP_PAGER");
-        let fullscreen = atom(xdisplay, "_NET_WM_STATE_FULLSCREEN");
 
-        let states = [above, sticky, skip_taskbar, skip_pager, fullscreen];
+        // 観測実験: FULLSCREEN を外す。ABOVE のみで描画位置・トップバーとの上下関係を確認する。
+        let states = [above, sticky, skip_taskbar, skip_pager];
         x11::xlib::XChangeProperty(
             xdisplay,
             xid,
@@ -153,7 +160,6 @@ fn set_x11_initial_wm_state(surface: &gdk::Surface) {
             states.as_ptr() as *const u8,
             states.len() as i32,
         );
-        x11::xlib::XFlush(xdisplay);
     }
 }
 
@@ -177,7 +183,7 @@ fn send_x11_state_change_above(surface: &gdk::Surface) {
             client_message: x11::xlib::XClientMessageEvent {
                 type_: x11::xlib::ClientMessage,
                 serial: 0,
-                send_event: 1,
+                send_event: 0,
                 display: xdisplay,
                 window: xid,
                 message_type: wm_state,
@@ -193,7 +199,30 @@ fn send_x11_state_change_above(surface: &gdk::Surface) {
             x11::xlib::SubstructureRedirectMask | x11::xlib::SubstructureNotifyMask,
             &mut event,
         );
-        x11::xlib::XFlush(xdisplay);
+    }
+}
+
+// マップ後に「横幅最大・縦 70%・中央寄せ」位置へ MoveResize する。
+// set_default_size でサイズは既に指定済みなので、ここは主に位置の中央寄せが目的。
+fn move_resize_to_monitor(surface: &gdk::Surface) {
+    let Some((xdisplay, xid)) = x11_handles(surface) else {
+        return;
+    };
+    let Some(display) = gdk::Display::default() else { return };
+    let Some(monitor) = display
+        .monitors()
+        .item(0)
+        .and_then(|o| o.downcast::<gdk::Monitor>().ok())
+    else {
+        return;
+    };
+    let geom = monitor.geometry();
+    let w = geom.width();
+    let h = (geom.height() as f64 * 0.75) as i32;
+    let x = geom.x();
+    let y = geom.y() + (geom.height() - h) / 2;
+    unsafe {
+        x11::xlib::XMoveResizeWindow(xdisplay, xid, x, y, w as u32, h as u32);
     }
 }
 
