@@ -1,20 +1,86 @@
+use std::cell::RefCell;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
+
+use clap::Parser;
+use gio::prelude::*;
 use gtk4::cairo;
 use gtk4::gdk;
 use gtk4::glib;
 use gtk4::pango;
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow};
-use std::time::Instant;
+use rand::seq::IteratorRandom;
+use rand::RngExt;
+use serde::Deserialize;
 
 const APP_ID: &str = "io.github.danmaku.gui";
 
-fn main() -> glib::ExitCode {
-    let app = Application::builder().application_id(APP_ID).build();
-    app.connect_activate(build_ui);
-    app.run()
+// 暫定値 (設定ファイル導入は Phase 3)。
+const DEFAULT_MAX_LINES: usize = 8;
+const DEFAULT_BASE_SPEED: f64 = 250.0; // px/sec
+const SPEED_JITTER: f64 = 0.3; // ±30%
+const SPAWN_GAP_SEC: f64 = 1.5; // 同レーンに新弾を出してよい最小間隔
+const PAYLOAD_STAGGER_MS: u64 = 250; // 同一受信内メッセージの最大ずらし
+
+#[derive(Parser, Debug)]
+#[command(name = "danmaku-gui-linux", about = "Danmaku overlay GUI (Linux/X11)")]
+struct Args {
+    /// 表示先ディスプレイ番号（gdk::Display::monitors() のインデックス）
+    #[arg(long, default_value_t = 0)]
+    screen: u32,
 }
 
-fn build_ui(app: &Application) {
+#[derive(Deserialize, Debug)]
+struct IncomingPayload {
+    screen: u32,
+    messages: Vec<String>,
+    #[allow(dead_code)]
+    color: Option<String>,
+    #[allow(dead_code)]
+    speed: Option<f64>,
+    #[allow(dead_code)]
+    size: Option<u32>,
+}
+
+struct Bullet {
+    text: String,
+    lane: usize,
+    speed: f64,
+    start_time: Instant,
+}
+
+struct DanmakuState {
+    screen: u32,
+    max_lines: usize,
+    base_speed: f64,
+    bullets: Vec<Bullet>,
+    last_spawn_at: Vec<Option<Instant>>, // length == max_lines
+}
+
+impl DanmakuState {
+    fn new(screen: u32) -> Self {
+        Self {
+            screen,
+            max_lines: DEFAULT_MAX_LINES,
+            base_speed: DEFAULT_BASE_SPEED,
+            bullets: Vec::new(),
+            last_spawn_at: vec![None; DEFAULT_MAX_LINES],
+        }
+    }
+}
+
+fn main() -> glib::ExitCode {
+    let args = Args::parse();
+    let app = Application::builder().application_id(APP_ID).build();
+    app.connect_activate(move |app| build_ui(app, args.screen));
+    // GTK に引数を解釈させない（clap で消費済み）
+    app.run_with_args::<&str>(&[])
+}
+
+fn build_ui(app: &Application, screen: u32) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("danmaku")
@@ -24,7 +90,7 @@ fn build_ui(app: &Application) {
 
     // 背景を透明に
     let css = gtk4::CssProvider::new();
-    // 確認用: ウィンドウ範囲を可視化するため半透明の赤を敷く。
+    // 確認用: ウィンドウ範囲を可視化するため半透明の薄色を敷く。
     // 本番では "background: transparent;" に戻す。
     css.load_from_string("window { background: rgba(100, 160, 220, 0.08); } window > * { background: transparent; }");
     gtk4::style_context_add_provider_for_display(
@@ -33,68 +99,32 @@ fn build_ui(app: &Application) {
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
+    let state = Rc::new(RefCell::new(DanmakuState::new(screen)));
+
     let drawing = gtk4::DrawingArea::new();
     drawing.set_hexpand(true);
     drawing.set_vexpand(true);
 
-    let start = Instant::now();
-    let text = "こんにちは弾幕です — Phase1 透過オーバーレイ実証".to_string();
-
+    let state_for_draw = state.clone();
     drawing.set_draw_func(move |area, cr, w, h| {
-        // 透明クリア
-        cr.set_operator(cairo::Operator::Clear);
-        cr.paint().ok();
-        cr.set_operator(cairo::Operator::Over);
-
-        // Pango でレイアウトを組む（日本語対応）
-        let layout = area.create_pango_layout(Some(&text));
-        let mut font = pango::FontDescription::from_string("Sans Bold 36");
-        font.set_absolute_size(36.0 * pango::SCALE as f64);
-        layout.set_font_description(Some(&font));
-
-        let (text_w_pango, _) = layout.size();
-        let text_w = text_w_pango as f64 / pango::SCALE as f64;
-
-        let elapsed = start.elapsed().as_secs_f64();
-        let speed = 250.0; // px/sec
-        let total = w as f64 + text_w;
-        let progress = (elapsed * speed) % total;
-        let x = w as f64 - progress;
-        let y = (h as f64) * 0.25;
-
-        // 縁取り（読みやすさ）
-        cr.move_to(x, y);
-        pangocairo::functions::layout_path(cr, &layout);
-        cr.set_source_rgba(0.0, 0.0, 0.0, 0.85);
-        cr.set_line_width(4.0);
-        cr.stroke().ok();
-
-        // 本体
-        cr.move_to(x, y);
-        cr.set_source_rgba(1.0, 1.0, 1.0, 1.0);
-        pangocairo::functions::show_layout(cr, &layout);
+        draw_bullets(&state_for_draw.borrow(), area, cr, w, h);
     });
 
     window.set_child(Some(&drawing));
 
-    // 横幅 = モニタ幅, 縦 = モニタ高の 75%, 中央寄せ。
-    // 面積比 75% < 80% なので mutter の auto-maximize 閾値 (work_area * 0.8) を下回り、
-    // MAXIMIZED が付かないため ABOVE が META_LAYER_TOP に乗る。
-    let (target_w, target_h) = match gdk::Display::default()
-        .and_then(|d| d.monitors().item(0))
-        .and_then(|o| o.downcast::<gdk::Monitor>().ok())
-    {
-        Some(m) => {
-            let g = m.geometry();
-            (g.width(), (g.height() as f64 * 0.75) as i32)
+    let monitor = match monitor_for_screen(screen) {
+        Some(m) => m,
+        None => {
+            eprintln!("danmaku-gui-linux: monitor #{screen} not found; aborting");
+            app.quit();
+            return;
         }
-        None => (640, 480),
     };
+    let geom = monitor.geometry();
+    let target_w = geom.width();
+    let target_h = (geom.height() as f64 * 0.75) as i32;
     window.set_default_size(target_w, target_h);
 
-    // realize: X11 ウィンドウが生成された直後 (まだマップされていない)。
-    //   - 空 input region でクリックスルー
-    //   - マップ前の初期 _NET_WM_STATE を XChangeProperty で直接書く (EWMH ar01s05)
     window.connect_realize(|win| {
         let Some(surface) = win.surface() else { return };
         let region = cairo::Region::create();
@@ -102,22 +132,216 @@ fn build_ui(app: &Application) {
         set_x11_initial_wm_state(&surface);
     });
 
-    // map: ウィンドウが実際に表示された (MapNotify 相当)。
-    //   - ABOVE を ADD (EWMH ClientMessage / SubstructureRedirect|Notify)
-    //   - モニタ位置へ MoveResize (中央寄せ)
-    window.connect_map(|win| {
+    window.connect_map(move |win| {
         let Some(surface) = win.surface() else { return };
         send_x11_state_change_above(&surface);
-        move_to_monitor_center(&surface);
+        move_to_monitor_center(&surface, screen);
     });
 
-    // FrameClock 同期の再描画。VSync に合わせて毎フレーム queue_draw する。
-    drawing.add_tick_callback(|area, _clock| {
+    let state_for_tick = state.clone();
+    drawing.add_tick_callback(move |area, _clock| {
+        // 画面から完全に外れた弾を除去
+        let w = area.width() as f64;
+        let mut st = state_for_tick.borrow_mut();
+        let now = Instant::now();
+        st.bullets.retain(|b| {
+            if b.start_time > now {
+                return true;
+            }
+            let elapsed = now.duration_since(b.start_time).as_secs_f64();
+            // text 幅は知らないので保守的に 2000px 進むまで保持
+            elapsed * b.speed < (w + 2000.0)
+        });
+        drop(st);
         area.queue_draw();
         glib::ControlFlow::Continue
     });
 
     window.present();
+
+    // socket listener を起動
+    match start_socket_listener(state.clone()) {
+        Ok(path) => eprintln!("danmaku-gui-linux: listening on {}", path.display()),
+        Err(e) => {
+            eprintln!("danmaku-gui-linux: failed to start socket listener: {e}");
+            app.quit();
+        }
+    }
+}
+
+fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Context, w: i32, h: i32) {
+    cr.set_operator(cairo::Operator::Clear);
+    cr.paint().ok();
+    cr.set_operator(cairo::Operator::Over);
+
+    let now = Instant::now();
+    let w_f = w as f64;
+    let h_f = h as f64;
+    let max_lines = state.max_lines;
+
+    for bullet in &state.bullets {
+        if bullet.start_time > now {
+            continue;
+        }
+        let elapsed = now.duration_since(bullet.start_time).as_secs_f64();
+
+        let layout = area.create_pango_layout(Some(&bullet.text));
+        let mut font = pango::FontDescription::from_string("Sans Bold 36");
+        font.set_absolute_size(36.0 * pango::SCALE as f64);
+        layout.set_font_description(Some(&font));
+
+        let x = w_f - elapsed * bullet.speed;
+        let y = lane_y(bullet.lane, h_f, max_lines);
+
+        cr.move_to(x, y);
+        pangocairo::functions::layout_path(cr, &layout);
+        cr.set_source_rgba(0.0, 0.0, 0.0, 0.85);
+        cr.set_line_width(4.0);
+        cr.stroke().ok();
+
+        cr.move_to(x, y);
+        cr.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+        pangocairo::functions::show_layout(cr, &layout);
+    }
+}
+
+fn lane_y(lane: usize, h: f64, max_lines: usize) -> f64 {
+    // 上下に少しマージンを取り、レーンを均等配置 (テキスト top 基準)。
+    let top = h * 0.08;
+    let bottom = h * 0.08;
+    let usable = h - top - bottom;
+    top + (lane as f64) * (usable / max_lines as f64)
+}
+
+fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
+    let mut rng = rand::rng();
+    let now = Instant::now();
+    for msg in messages {
+        let free: Vec<usize> = (0..state.max_lines)
+            .filter(|&i| {
+                state.last_spawn_at[i]
+                    .map(|t| now.duration_since(t).as_secs_f64() >= SPAWN_GAP_SEC)
+                    .unwrap_or(true)
+            })
+            .collect();
+        let lane = if let Some(&l) = free.iter().choose(&mut rng) {
+            l
+        } else {
+            let l = rng.random_range(0..state.max_lines);
+            eprintln!(
+                "danmaku-gui-linux: no free lane; overlapping on lane {l}: {msg:?}"
+            );
+            l
+        };
+        let speed_factor = 1.0 + rng.random_range(-SPEED_JITTER..SPEED_JITTER);
+        let speed = state.base_speed * speed_factor;
+        let stagger_ms = rng.random_range(0..PAYLOAD_STAGGER_MS);
+        let start_time = now + Duration::from_millis(stagger_ms);
+        state.last_spawn_at[lane] = Some(start_time);
+        state.bullets.push(Bullet {
+            text: msg.clone(),
+            lane,
+            speed,
+            start_time,
+        });
+    }
+}
+
+fn socket_path() -> Result<PathBuf, String> {
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_string())?;
+    Ok(PathBuf::from(dir).join("danmaku.sock"))
+}
+
+fn ensure_socket_available(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+    // 既存ファイルが生きた socket か確認
+    match UnixStream::connect(path) {
+        Ok(_) => Err(format!(
+            "socket {} is already in use by another process",
+            path.display()
+        )),
+        Err(_) => {
+            // 死んでいる → unlink
+            std::fs::remove_file(path)
+                .map_err(|e| format!("failed to unlink stale socket {}: {e}", path.display()))
+        }
+    }
+}
+
+fn start_socket_listener(state: Rc<RefCell<DanmakuState>>) -> Result<PathBuf, String> {
+    let path = socket_path()?;
+    ensure_socket_available(&path)?;
+
+    let listener = gio::SocketListener::new();
+    let address = gio::UnixSocketAddress::new(&path);
+    listener
+        .add_address(
+            &address,
+            gio::SocketType::Stream,
+            gio::SocketProtocol::Default,
+            None::<&glib::Object>,
+        )
+        .map_err(|e| format!("add_address failed: {e}"))?;
+
+    let listener_clone = listener.clone();
+    glib::MainContext::default().spawn_local(async move {
+        loop {
+            match listener_clone.accept_future().await {
+                Ok((conn, _src)) => {
+                    let state = state.clone();
+                    glib::MainContext::default().spawn_local(async move {
+                        handle_connection(conn, state).await;
+                    });
+                }
+                Err(e) => {
+                    eprintln!("danmaku-gui-linux: accept failed: {e}");
+                    break;
+                }
+            }
+        }
+    });
+
+    Ok(path)
+}
+
+async fn handle_connection(conn: gio::SocketConnection, state: Rc<RefCell<DanmakuState>>) {
+    let input = conn.input_stream();
+    let reader = gio::DataInputStream::new(&input);
+    loop {
+        match reader.read_line_future(glib::Priority::default()).await {
+            Ok(Some(line)) => {
+                let line_str = String::from_utf8_lossy(&line).to_string();
+                process_line(&line_str, &state);
+            }
+            Ok(None) => break, // EOF
+            Err(e) => {
+                eprintln!("danmaku-gui-linux: read failed: {e}");
+                break;
+            }
+        }
+    }
+}
+
+fn process_line(line: &str, state: &Rc<RefCell<DanmakuState>>) {
+    let payload: IncomingPayload = match serde_json::from_str(line) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("danmaku-gui-linux: JSON parse failed: {e}; line={line:?}");
+            return;
+        }
+    };
+    let mut st = state.borrow_mut();
+    if payload.screen != st.screen {
+        eprintln!(
+            "danmaku-gui-linux: screen mismatch (got {}, expected {}); dropping",
+            payload.screen, st.screen
+        );
+        return;
+    }
+    spawn_messages(&mut st, &payload.messages);
 }
 
 fn x11_handles(surface: &gdk::Surface) -> Option<(*mut x11::xlib::Display, x11::xlib::Window)> {
@@ -148,7 +372,6 @@ fn set_x11_initial_wm_state(surface: &gdk::Surface) {
         let skip_taskbar = atom(xdisplay, "_NET_WM_STATE_SKIP_TASKBAR");
         let skip_pager = atom(xdisplay, "_NET_WM_STATE_SKIP_PAGER");
 
-        // 観測実験: FULLSCREEN を外す。ABOVE のみで描画位置・トップバーとの上下関係を確認する。
         let states = [above, sticky, skip_taskbar, skip_pager];
         x11::xlib::XChangeProperty(
             xdisplay,
@@ -202,19 +425,20 @@ fn send_x11_state_change_above(surface: &gdk::Surface) {
     }
 }
 
+// 指定された screen 番号 (gdk::Display::monitors() のインデックス) のモニタを取得する。
+fn monitor_for_screen(screen: u32) -> Option<gdk::Monitor> {
+    gdk::Display::default()?
+        .monitors()
+        .item(screen)
+        .and_then(|o| o.downcast::<gdk::Monitor>().ok())
+}
+
 // マップ後にウィンドウをモニタ中央 (縦方向) へ移動する。
-// サイズは set_default_size で指定済みのため、ここでは位置指定のみ行う。
-// GTK4 には X11 ウィンドウの位置指定 API が無いため Xlib を使う。
-fn move_to_monitor_center(surface: &gdk::Surface) {
+fn move_to_monitor_center(surface: &gdk::Surface, screen: u32) {
     let Some((xdisplay, xid)) = x11_handles(surface) else {
         return;
     };
-    let Some(display) = gdk::Display::default() else { return };
-    let Some(monitor) = display
-        .monitors()
-        .item(0)
-        .and_then(|o| o.downcast::<gdk::Monitor>().ok())
-    else {
+    let Some(monitor) = monitor_for_screen(screen) else {
         return;
     };
     let geom = monitor.geometry();
