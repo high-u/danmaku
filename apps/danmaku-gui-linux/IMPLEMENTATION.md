@@ -27,7 +27,7 @@ X11 + GNOME Shell (Mutter) 上で「透過 / クリックスルー / 最前面�
 ### マップ後処理のトリガー: `Widget::connect_map`
 - 【事実】GTK4 公式シグナル。ウィジェットがマップされた (X11 `MapNotify` 相当) 時に発火する。EWMH ar01s05 が要求する「マップ後の `_NET_WM_STATE` 変更は ClientMessage」のタイミングと意味的に一致する。
 - 【事実】`connect_realize` は X11 ウィンドウ生成時のシグナルで、まだマップされていない。realize ≠ map。
-- 【経緯】当初は `connect_realize` の中で `glib::idle_add_local_once` を 1 回挟んでマップ完了を待つ実装だった。実機では安定動作していたが、これは「メインループが暇になった瞬間」を待つだけでマップ完了を保証しない (タイミング依存) という事実があったため、`connect_map` に分割。realize では input_region と マップ前 property、map で ClientMessage と MoveResize、と責務が明確になった。
+- 【経緯】当初は `connect_realize` の中で `glib::idle_add_local_once` を 1 回挟んでマップ完了を待つ実装だった。実機では安定動作していたが、これは「メインループが暇になった瞬間」を待つだけでマップ完了を保証しない (タイミング依存) という事実があったため、`connect_map` に分割。realize では input_region と マップ前 property、map で ClientMessage と 位置指定 (MoveWindow)、と責務が明確になった。
 
 ## 2. 一般的なアプローチ (筋は通っているが選択の余地あり)
 
