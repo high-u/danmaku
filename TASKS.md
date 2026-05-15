@@ -9,7 +9,7 @@
 | Phase | 内容 | 状態 |
 |---|---|---|
 | 1 | `danmaku-gui-linux` 最小プロト (X11 透過オーバーレイ実証) | ✅ 完了 |
-| 2 | `danmaku-cli` + socket 通信 + 複数行ランダム配置 | ⏳ 未着手 |
+| 2 | `danmaku-cli` + socket 通信 + 複数行ランダム配置 | ✅ 完了 |
 | 3 | 設定ファイル (`~/.config/danmaku/config.toml`) 読み込み | ⏳ 未着手 |
 | 4 | `getscreens` シェルスクリプト | ⏳ 未着手 |
 | 5 | `skills/danmaku/SKILL.md` (インストール手順 / cron 設定 / 振る舞い指示) | ⏳ 未着手 |
@@ -35,21 +35,28 @@
 
 ---
 
-## Phase 2: `danmaku-cli` + socket 通信 + 複数行ランダム配置 ⏳
+## Phase 2: `danmaku-cli` + socket 通信 + 複数行ランダム配置 ✅
 
-**想定ブランチ名:** `app/danmaku-cli`
+**ブランチ:** `app/danmaku-cli`
 
 **ゴール:** シェルから `danmaku-cli "..."` を叩けば、`danmaku-gui-linux` 上で複数本がランダムに流れる状態にする。
 
-- [ ] `apps/danmaku-cli/` を Rust で `cargo init`
-- [ ] CLI 引数仕様: `--screen N`、複数文字列を位置引数で
-- [ ] socket パス: `$XDG_RUNTIME_DIR/danmaku.sock`（Linux）
-- [ ] JSON 1 行 (改行区切り) を送って即終了:
+- [x] `apps/danmaku-cli/` を Rust で `cargo init`
+- [x] CLI 引数仕様: `--screen N`（デフォルト 0）、複数文字列を位置引数で
+- [x] socket パス: `$XDG_RUNTIME_DIR/danmaku.sock`（Linux）。未設定はエラー終了
+- [x] JSON 1 行 (改行区切り) を送って即終了:
       `{"screen": 0, "messages": ["a","b"], "color": "white", "speed": 1.0}`
-- [ ] 失敗時 stderr + 非ゼロ終了。AI エージェントが見るので、エラー理由が分かるようにする。エラーである必要もなさそうだが？
-- [ ] `danmaku-gui-linux` 側に Unix socket listener を追加
-- [ ] 受信メッセージごとに「弾」を spawn（縦位置ランダム性、流れ出しタイミングのランダム性、速度のランダム性、ただし完全ランダムではなく、バランス良くランダムになるようにする）
-- [ ] 同時に複数本流れる動作確認（重なり NG）。
+- [x] 失敗時 stderr + 非ゼロ終了
+- [x] `danmaku-gui-linux` 側に Unix socket listener を追加（`gio::SocketListener` を `MainContext::spawn_local`）
+- [x] 受信メッセージごとに「弾」を spawn（レーン制、空きレーンランダム選択 / 速度ランダム / 出現タイミングずらし）
+- [x] 空きレーン無しの場合は全レーンからランダム選択して重ねる（破棄しない: 取りこぼしの不可視化を避ける）
+- [x] 動作確認
+
+**Phase 3 に持ち越した項目:**
+
+- 受信 JSON の `color` / `speed` / `size` は GUI 側で未適用（dead_code）。設定ファイル導入と合わせて適用
+- `max_lines` / `base_speed` / フォント等は GUI 側でハードコード暫定値。設定ファイルから読む
+- ログは `eprintln!` ベース。レベル分け（log/tracing クレート）は当面不要、運用観察で必要性が出てから検討
 
 ---
 
