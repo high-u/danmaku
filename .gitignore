@@ -1,2 +1,9 @@
 target/
 **/*.rs.bk
+
+# 研究用にクローンした外部リポジトリ
+/opencode/
+/qwen-code/
+
+# 参考資料
+Skill-for-Claude.pdf
