@@ -12,7 +12,7 @@
 | 2 | `danmaku-cli` + socket 通信 + 複数行ランダム配置 | ✅ 完了 |
 | 3 | 設定ファイル (`~/.config/danmaku/config.toml`) 読み込み | ⏳ 未着手 |
 | 4 | `getscreens` (Rust + maim ハイブリッド、JSON 配列出力) | ✅ 完了 |
-| 5 | `skills/danmaku/SKILL.md` (Agent Skills 仕様準拠 / インストール手順 / ループ指示) | ⏳ 未着手 |
+| 5 | `skills/danmaku/SKILL.md` (Agent Skills 仕様準拠 / ループ指示) + 開発者向け README | 🔄 動作確認まで完了・検証残 |
 | 6 | トレイアイコン | ⏳ 未着手 |
 | 7 | `danmaku-gui-macos` (Swift, macOS 実機) | ⏳ 未着手 |
 
@@ -102,30 +102,44 @@
 
 ---
 
-## Phase 5: Agent Skill (`skills/danmaku/SKILL.md`) ⏳
+## Phase 5: Agent Skill (`skills/danmaku/SKILL.md`) 🔄
 
-**想定ブランチ名:** `skill/danmaku`
+**ブランチ名:** `app/danmaku-skill`
 
-**ゴール:** 利用者がスキルをインストールしてエージェントに「環境構築して」と頼めば依存と各アプリのビルドが整い、「今から N 分間、スクショ取得とコメントを繰り返して。danmaku スキルを使うこと」のような指示でループが回る状態にする。定期実行 (cron / systemd timer) は使わない。
+**ゴール:** 「今から N 分間スクショを見てコメントを流して」「3 回コメントを流して」のような指示でループが回る状態にする。定期実行 (cron / systemd timer) は使わない。
 
-- [ ] [Agent Skills 仕様](https://agentskills.io/specification) 準拠を確認
-  - `name: danmaku`（親ディレクトリ名と一致）
-  - `description` に「何をするか」と「いつ使うか」を具体的キーワード込みで記述
-  - `compatibility` に X11 / GTK4 / maim / xrandr 等の要件を明記
-  - 本文は 500 行未満、詳細は `references/` 配下に分割
-- [ ] `skills/danmaku/SKILL.md` の章立て:
-  - 弾幕の用途と前提（ローカル LLM、X11、シェル実行可能エージェント）
-  - 各コマンドの使い方（`danmaku-cli` / `getscreens` の JSON 出力の読み方）
-  - `danmaku-gui-linux` のビルド・インストール手順
-  - **`danmaku-gui-linux` の手動起動手順案内**（自動起動は当面想定しない。動作検証しつつ将来の組み込み是非を判断）
-  - `~/.config/danmaku/config.toml` の生成手順
-  - AI エージェントへの自律的振る舞い指示:
-    - 利用者の自然言語指示（時間・観点）の解釈方法
-    - 1 ターンの流れ: `getscreens` → JSON のパスを画像読み込み機能でロード → コメント生成 → `danmaku-cli` 実行
-    - 過去スクショ参照、観察観点、コメント生成方針
-    - 終了条件の判断
-- [ ] `skills-ref validate ./skills/danmaku` でフロントマターを検証
-- [ ] 1 ユーザで実際にスキルから環境構築 + ループ実行できることを確認
+### 実施した方針転換
+
+着手時の想定との差分:
+
+- **環境構築手順は SKILL.md ではなく `README.md` に分離**。SKILL.md は「ループのレシピ」だけに絞り、ビルド・インストール・GUI 起動は人間向け README が担う。コーダーアプリは起動時に SKILL.md を一覧として常時保持するため、SKILL.md を短く保つメリットが大きい
+- **`compatibility` フィールドは未使用**。OS / X11 / GTK4 のような実行環境制約は SKILL.md に書いても LLM の挙動を変えないため。前提の存在自体は本文の「前提チェック」で `which` / `pgrep` により実証
+- **`references/` 分割は未実施**。SKILL.md が約 120 行 / 250 ワードに収まり、Anthropic ガイドの「5000 ワード未満」「500 行未満」に余裕で収まったため分割不要
+- **コマンド配線は symlink で対応**。`.qwen/skills/danmaku` および `.opencode/skills/danmaku` は `skills/danmaku/` への相対シンボリックリンク。本体を 1 箇所に保ちつつ複数のコーダーアプリから参照させる
+
+### 完了項目
+
+- [x] [Agent Skills 仕様](https://agentskills.io/specification) 準拠（`name`, `description`, frontmatter `---` 区切り、XML angle brackets 不使用）
+- [x] SKILL.md 本文の章立て:
+  - 用語（ターン数 / コメント数の定義）
+  - 前提チェック（`which getscreens` / `which danmaku-cli` / `pgrep -f danmaku-gui-linux`）
+  - 利用者指示の解釈（ターン数または継続時間 / 観点 / 間隔）
+  - 1 ターンの 4 ステップ（getscreens → 画像読み込み → danmaku-cli → sleep）
+  - ターン数分繰り返す手順（ターン K/N の自己宣言を含む）
+  - コメントの作り方（キャラクター / 長さ / 個数 / 差分参照 / 機密情報の保護）
+  - エラー時の挙動
+- [x] 開発者向け `README.md` 作成（GUI の `cargo run`、`getscreens` / `danmaku-cli` の `cargo install --path`、小型モデル向け推奨プロンプト例）
+- [x] `danmaku-cli` の成功時メッセージ出力 (`sent N message(s) to screen ...`) を追加し、エージェントが成功/失敗を判別可能に
+- [x] opencode + `unsloth/Qwen3.6-35B-A3B-GGUF` で 3 ターンループの動作確認（getscreens / 画像読み込み / コメント送出 / sleep の繰り返しが成立）
+- [x] opencode + Gemma 4B 系での簡易動作確認（ループは回るが画像読み込みスキップ等の揺れあり、調整余地は記録済み）
+- [x] opencode の model 設定で `modalities.input: ["text", "image"]` を宣言しないと vision attachment が剥がれる挙動を特定し対処手順を残す
+
+### 持ち越し
+
+- [ ] `skills-ref validate ./skills/danmaku` でフロントマターを検証（コマンド導入後）
+- [ ] PDF p.30 推奨の triggering テスト: パラフレーズ（言い換え）で発火するか、無関係クエリ（「PDF を要約して」「コードレビューして」等）で誤発火しないか
+- [ ] コメント数の上限見直し（現状 1〜5、利用者の体感期待値は 3〜7）
+- [ ] Phase 3 完了後、設定ファイルからの上書き経路を SKILL.md に追記
 
 ---
 
