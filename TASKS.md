@@ -11,7 +11,7 @@
 | 1 | `danmaku-gui-linux` 最小プロト (X11 透過オーバーレイ実証) | ✅ 完了 |
 | 2 | `danmaku-cli` + socket 通信 + 複数行ランダム配置 | ✅ 完了 |
 | 3 | 設定ファイル (`~/.config/danmaku/config.toml`) 読み込み | ⏳ 未着手 |
-| 4 | `getscreens` (Rust + maim ハイブリッド、JSON 配列出力) | ⏳ 未着手 |
+| 4 | `getscreens` (Rust + maim ハイブリッド、JSON 配列出力) | ✅ 完了 |
 | 5 | `skills/danmaku/SKILL.md` (Agent Skills 仕様準拠 / インストール手順 / ループ指示) | ⏳ 未着手 |
 | 6 | トレイアイコン | ⏳ 未着手 |
 | 7 | `danmaku-gui-macos` (Swift, macOS 実機) | ⏳ 未着手 |
@@ -73,28 +73,30 @@
 
 ---
 
-## Phase 4: `getscreens` (Rust + maim ハイブリッド) ⏳
+## Phase 4: `getscreens` (Rust + maim ハイブリッド) ✅
 
-**想定ブランチ名:** `app/getscreens`
+**ブランチ:** `app/getscreens`
 
 **ゴール:** スクリーンショットを保存し、ファイルパスを JSON 配列で stdout に返す独立コマンド。弾幕の存在は知らない。
 
 **方式:** ハイブリッド (Rust バイナリ + ネイティブツール委譲)。xcap クレートは docs.rs の最新版ビルド失敗と最終成功版とのバージョン乖離が大きく信頼性に懸念があるため不採用。OS ごとに別実装する方針は GUI 部分と同じ。
 
-- [ ] `apps/getscreens/` を Rust で `cargo init`
-- [ ] CLI 引数仕様（最低限）: `--dir <PATH> --size <PX>`、既定でメインモニターのみ取得
-- [ ] **拡張オプション（将来実装、まずは未実装で出す）**: `--all`（全モニター）、`--screen N`（指定モニター）
-- [ ] Linux 実装:
+- [x] `apps/getscreens/` を Rust で `cargo init`
+- [x] CLI 引数仕様（最低限）: `--dir <PATH> --size <PX>`、既定でメインモニターのみ取得
+  - `--dir` 未指定時のデフォルト: `$XDG_RUNTIME_DIR/getscreens`（未設定なら `/tmp/getscreens`）
+  - `--size` 未指定時は縮小なし（maim 出力をそのまま使う）
+- [x] **拡張オプション（将来実装、まずは未実装で出す）**: `--all`（全モニター）、`--screen N`（指定モニター）
+- [x] Linux 実装:
   - モニター列挙: `xrandr` 出力をパースしプライマリを特定
   - キャプチャ: `maim` を `std::process::Command` で呼び出し PNG を取得
-  - リサイズ: `image` クレート（純 Rust）で長辺 `--size` に縮小。ImageMagick 依存なし
-- [ ] 出力: stdout に JSON 配列 1 行
+  - リサイズ: `image` クレート（純 Rust）で長辺 `--size` に縮小。ImageMagick 依存なし。フィルタは Triangle 固定（可変化は未決事項に記載）
+- [x] 出力: stdout に JSON 配列 1 行
   - `[{"screen": 0, "path": "...", "timestamp": "20260516-120000"}]`
   - 配列は将来 `--all` で複数要素になる前提（メインのみでも常に配列）
-- [ ] ファイル名: `YYYYMMDD-HHMMSS.png`（時系列ソート可能）
-- [ ] 失敗時: stderr にエラー、stdout は空、非ゼロ終了
-- [ ] 必要パッケージのチェック（`maim` / `xrandr` 不在時は親切なエラー）
-- [ ] 単独で動くことを確認（弾幕とは独立）
+- [x] ファイル名: `YYYYMMDD-HHMMSS.png`（時系列ソート可能）
+- [x] 失敗時: stderr にエラー、stdout は空、非ゼロ終了
+- [x] 必要パッケージのチェック（`maim` / `xrandr` 不在時は親切なエラー）
+- [x] 単独で動くことを確認（弾幕とは独立）
 
 **macOS は Phase 7 と合わせて別途**: `screencapture -x` + モニター列挙手段（未決）で同じ JSON 契約を満たす。
 
@@ -156,6 +158,7 @@
 ## 未決事項（必要に応じて道中で確定）
 
 - `getscreens` のクリーンナップ戦略（日付ローテーション / 何もしない / 既存古ファイル削除）
+- `getscreens` のリサイズフィルタを可変にする（現在 Triangle 固定）。LLM への可読性とループ頻度の体感のトレードオフで利用者が選びたくなる可能性。実装は容易（`image::imageops::FilterType` を CLI フラグまたは設定ファイル経由で受ける）。当面は Triangle 固定で運用し、必要が出てから追加
 - macOS の socket パス規約
 - macOS でのモニター列挙手段（`system_profiler` 解析か別手段か）
 - トレイメニューの項目
