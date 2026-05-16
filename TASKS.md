@@ -11,8 +11,8 @@
 | 1 | `danmaku-gui-linux` 最小プロト (X11 透過オーバーレイ実証) | ✅ 完了 |
 | 2 | `danmaku-cli` + socket 通信 + 複数行ランダム配置 | ✅ 完了 |
 | 3 | 設定ファイル (`~/.config/danmaku/config.toml`) 読み込み | ⏳ 未着手 |
-| 4 | `getscreens` シェルスクリプト | ⏳ 未着手 |
-| 5 | `skills/danmaku/SKILL.md` (インストール手順 / cron 設定 / 振る舞い指示) | ⏳ 未着手 |
+| 4 | `getscreens` (Rust + maim ハイブリッド、JSON 配列出力) | ⏳ 未着手 |
+| 5 | `skills/danmaku/SKILL.md` (Agent Skills 仕様準拠 / インストール手順 / ループ指示) | ⏳ 未着手 |
 | 6 | トレイアイコン | ⏳ 未着手 |
 | 7 | `danmaku-gui-macos` (Swift, macOS 実機) | ⏳ 未着手 |
 
@@ -73,18 +73,30 @@
 
 ---
 
-## Phase 4: `getscreens` シェルスクリプト ⏳
+## Phase 4: `getscreens` (Rust + maim ハイブリッド) ⏳
 
 **想定ブランチ名:** `app/getscreens`
 
-**ゴール:** 指定画面のスクリーンショットを保存する独立コマンド。弾幕の存在は知らない。
+**ゴール:** スクリーンショットを保存し、ファイルパスを JSON 配列で stdout に返す独立コマンド。弾幕の存在は知らない。
 
-- [ ] `apps/getscreens/getscreens` (shebang つきシェルスクリプト)
-- [ ] 引数仕様: `--screen N --dir <PATH> --size <PX>`
-- [ ] Linux 実装: `scrot` または `maim` + `convert` でリサイズ
+**方式:** ハイブリッド (Rust バイナリ + ネイティブツール委譲)。xcap クレートは docs.rs の最新版ビルド失敗と最終成功版とのバージョン乖離が大きく信頼性に懸念があるため不採用。OS ごとに別実装する方針は GUI 部分と同じ。
+
+- [ ] `apps/getscreens/` を Rust で `cargo init`
+- [ ] CLI 引数仕様（最低限）: `--dir <PATH> --size <PX>`、既定でメインモニターのみ取得
+- [ ] **拡張オプション（将来実装、まずは未実装で出す）**: `--all`（全モニター）、`--screen N`（指定モニター）
+- [ ] Linux 実装:
+  - モニター列挙: `xrandr` 出力をパースしプライマリを特定
+  - キャプチャ: `maim` を `std::process::Command` で呼び出し PNG を取得
+  - リサイズ: `image` クレート（純 Rust）で長辺 `--size` に縮小。ImageMagick 依存なし
+- [ ] 出力: stdout に JSON 配列 1 行
+  - `[{"screen": 0, "path": "...", "timestamp": "20260516-120000"}]`
+  - 配列は将来 `--all` で複数要素になる前提（メインのみでも常に配列）
 - [ ] ファイル名: `YYYYMMDD-HHMMSS.png`（時系列ソート可能）
-- [ ] 必要パッケージのチェック（無ければ親切なエラー）
+- [ ] 失敗時: stderr にエラー、stdout は空、非ゼロ終了
+- [ ] 必要パッケージのチェック（`maim` / `xrandr` 不在時は親切なエラー）
 - [ ] 単独で動くことを確認（弾幕とは独立）
+
+**macOS は Phase 7 と合わせて別途**: `screencapture -x` + モニター列挙手段（未決）で同じ JSON 契約を満たす。
 
 ---
 
@@ -92,17 +104,26 @@
 
 **想定ブランチ名:** `skill/danmaku`
 
-**ゴール:** 利用者が `gh skill install` してエージェントに「環境構築して」と頼めば、依存インストールから cron 設定までが完了する状態にする。
+**ゴール:** 利用者がスキルをインストールしてエージェントに「環境構築して」と頼めば依存と各アプリのビルドが整い、「今から N 分間、スクショ取得とコメントを繰り返して。danmaku スキルを使うこと」のような指示でループが回る状態にする。定期実行 (cron / systemd timer) は使わない。
 
+- [ ] [Agent Skills 仕様](https://agentskills.io/specification) 準拠を確認
+  - `name: danmaku`（親ディレクトリ名と一致）
+  - `description` に「何をするか」と「いつ使うか」を具体的キーワード込みで記述
+  - `compatibility` に X11 / GTK4 / maim / xrandr 等の要件を明記
+  - 本文は 500 行未満、詳細は `references/` 配下に分割
 - [ ] `skills/danmaku/SKILL.md` の章立て:
   - 弾幕の用途と前提（ローカル LLM、X11、シェル実行可能エージェント）
-  - 各コマンドの使い方（`danmaku-cli` / `getscreens`）
+  - 各コマンドの使い方（`danmaku-cli` / `getscreens` の JSON 出力の読み方）
   - `danmaku-gui-linux` のビルド・インストール手順
+  - **`danmaku-gui-linux` の手動起動手順案内**（自動起動は当面想定しない。動作検証しつつ将来の組み込み是非を判断）
   - `~/.config/danmaku/config.toml` の生成手順
-  - systemd user service で `danmaku-gui-linux` を自動起動
-  - 画面ごとの cron 設定生成手順（`getscreens && AI エージェント CLI` 直列）
-  - AI エージェントへの自律的振る舞い指示（過去スクショ参照、観察観点、コメント生成）
-- [ ] 1 ユーザで実際にスキルから環境構築できることを確認
+  - AI エージェントへの自律的振る舞い指示:
+    - 利用者の自然言語指示（時間・観点）の解釈方法
+    - 1 ターンの流れ: `getscreens` → JSON のパスを画像読み込み機能でロード → コメント生成 → `danmaku-cli` 実行
+    - 過去スクショ参照、観察観点、コメント生成方針
+    - 終了条件の判断
+- [ ] `skills-ref validate ./skills/danmaku` でフロントマターを検証
+- [ ] 1 ユーザで実際にスキルから環境構築 + ループ実行できることを確認
 
 ---
 
@@ -135,10 +156,12 @@
 ## 未決事項（必要に応じて道中で確定）
 
 - `getscreens` のクリーンナップ戦略（日付ローテーション / 何もしない / 既存古ファイル削除）
-- cron 行の具体的フォーマット（AI エージェント CLI の起動コマンド表現）
 - macOS の socket パス規約
+- macOS でのモニター列挙手段（`system_profiler` 解析か別手段か）
 - トレイメニューの項目
 - ログ・履歴機能の要否
+- AI エージェント側のコンテキスト肥大化対策（毎ターンのスクショ読みでコンテキストが膨らむことへの懸念）。**当面は対策を入れず、まず素のループ動作で問題の出方を観察する**。検討候補: スキル内でのサブエージェント利用、コンテキスト圧縮、セッション管理機能の活用。実際に問題が顕在化してから取り組む
+- AI エージェント側のコンテキスト肥大化対策（サブエージェント / コンテキスト圧縮 / セッション管理 — Phase 5 動作検証後に評価）
 
 ## 運用ルール
 
