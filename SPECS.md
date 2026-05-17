@@ -151,10 +151,11 @@ cron / systemd timer などの OS 機構は使わない。利用者が AI エー
 
 ### `danmaku-gui-macos`
 
-- 言語: Swift（Xcode 不要、`swift` CLI でビルド）
-- GUI: SwiftUI + `NSPanel`（`NSWindow.level = .screenSaver` でオーバーレイ）
+- 言語: Rust（Apple toolchain 非依存、`cargo` でビルド）
+- GUI: AppKit (`NSPanel`、`NSWindow.level = .screenSaver` でオーバーレイ) を [`objc2`](https://crates.io/crates/objc2) / [`objc2-app-kit`](https://crates.io/crates/objc2-app-kit) 経由で利用
 - 役割: Linux 版と同等（socket 受信 + 弾幕表示のみ）
 - 開発: macOS 実機上で行う
+- 言語選定の経緯: 初期想定は Swift だったが、Xcode を要求しないと swift toolchain (CLT 同梱) の不具合を踏むことが判明し、また「軽量・標準・安全」の方針と合致しないため Rust + objc2 を採用。`objc2-app-kit` は Apple SDK ヘッダから自動生成された型付き API で、winit / wgpu / Tauri / Servo / Slint 等 Rust 主要 GUI 系プロジェクトが採用しており、Rust エコシステム内の事実上の標準として扱える
 
 ### 画像読み込み
 
@@ -286,7 +287,7 @@ danmaku/
 ├── apps/
 │   ├── danmaku-cli/        # Rust (Linux/macOS 共通ソース)
 │   ├── danmaku-gui-linux/  # Rust + GTK4
-│   ├── danmaku-gui-macos/  # Swift
+│   ├── danmaku-gui-macos/  # Rust + objc2 (AppKit)
 │   └── getscreens/         # Rust (maim/screencapture を内部で呼ぶハイブリッド)
 ├── skills/
 │   └── danmaku/

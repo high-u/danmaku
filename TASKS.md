@@ -14,7 +14,8 @@
 | 4 | `getscreens` (Rust + maim ハイブリッド、JSON 配列出力) | ✅ 完了 |
 | 5 | `skills/danmaku/SKILL.md` (Agent Skills 仕様準拠 / インストール手順 / ループ指示) | ⏳ 未着手 |
 | 6 | トレイアイコン | ⏳ 未着手 |
-| 7 | `danmaku-gui-macos` (Swift, macOS 実機) | ⏳ 未着手 |
+| 7 | `danmaku-gui-linux` レーン配置の上下マージン削除 | ⏳ 未着手 |
+| 8 | `danmaku-gui-macos` (Rust + objc2, macOS 実機) | 🚧 着手中 |
 
 ---
 
@@ -141,17 +142,71 @@
 
 ---
 
-## Phase 7: `danmaku-gui-macos` ⏳
+## Phase 7: `danmaku-gui-linux` レーン配置の上下マージン削除 ⏳
 
-**想定ブランチ名:** `app/danmaku-gui-macos`
+**想定ブランチ名:** `fix/linux-lane-margin`
 
-**ゴール:** macOS で Linux 版と同等の透過クリックスルーオーバーレイを実現。
+**ゴール:** `danmaku-gui-linux` のレーン y 座標計算から、ウィンドウ内側の上下 8% マージンを削除する。
 
-- [ ] `apps/danmaku-gui-macos/` を Swift Package で初期化（Xcode 不要、`swift` CLI）
-- [ ] `NSPanel` + `NSWindow.level = .screenSaver`
-- [ ] socket パス（`$TMPDIR/danmaku.sock` 等、要決定）
-- [ ] SwiftUI で弾幕描画
-- [ ] 実機で確認
+**背景:** ウィンドウは既に画面高さの 75%・縦中央配置で、外側に十分な余白がある (これは X11/GTK4 でフルスクリーン扱いされる挙動の回避という Linux 固有の制約に由来)。にもかかわらず現状の `lane_y` (`apps/danmaku-gui-linux/src/main.rs:208-214`) は更に上下 8% を引いた 84% の領域に弾を詰めており、二重マージンになっている。SPECS / 設計議論で一度も出ていない値であり、画面端に流れない不自然さの原因にもなっている。**害悪**として削除する。
+
+- [ ] `lane_y` を「ウィンドウ高 `h` を `max_lines` で等分し、各レーンに割り当てる」式に書き換える (内側マージンなし)
+- [ ] 75% ウィンドウ + 縦中央配置の現状ロジック (`build_ui` 内の `target_h` / `move_to_monitor_center`) は据え置き
+- [ ] 実機で目視確認 (画面上端・下端付近にも弾が流れること)
+
+---
+
+## Phase 8: `danmaku-gui-macos` 🚧
+
+**ブランチ:** `app/danmaku-gui-macos`
+
+**ゴール:** macOS で Linux 版と同等の透過クリックスルーオーバーレイを実現する。基本は Linux 版からの移植だが、Linux 固有の制約に由来する部分は macOS 側の妥当な手段で置き換える。**実装中に不明点・曖昧点が出たら都度確認する (勝手に決めない)**。
+
+**前提 (確定済み):**
+
+- 言語: **Rust + objc2 / objc2-app-kit / objc2-foundation** (Apple toolchain 非依存、`cargo` でビルド)
+  - 初期想定は Swift だったが、Xcode 非導入で swift toolchain (CLT 同梱) の不具合を踏み、また「軽量・標準・安全」の方針と合致しないため Rust に変更
+  - `objc2-app-kit` は Apple SDK ヘッダから自動生成された型付き API で、winit / wgpu / Tauri / Servo / Slint 等 Rust 主要 GUI 系が採用しているため、Rust 内の事実上の標準として扱える
+  - 詳細経緯は SPECS.md `danmaku-gui-macos` 節を参照
+- socket パス: `$TMPDIR/danmaku.sock` (未設定なら `/tmp/danmaku.sock`)。`danmaku-cli` 側も OS 分岐で同じ解決ロジックを追加
+- `--screen N`: `NSScreen.screens` の配列インデックスを採用 (Linux 版が `gdk::Display::monitors()` のインデックスを使うのと同じ思想)
+- ウィンドウサイズ: 対象スクリーンの高さ 75%・縦中央 (Linux 版に合わせる。macOS には Linux のような制約はないが「合わせる」)
+- レーン配置: ウィンドウ高を `max_lines` で等分。**内側上下マージンは設けない** (Phase 7 と同じ方針)
+
+**Linux 版から移植するパラメータ・挙動:**
+
+- `max_lines = 8` / `base_speed = 250 px/s` / `SPEED_JITTER = 0.3` / `SPAWN_GAP_SEC = 1.5` / `PAYLOAD_STAGGER_MS = 250`
+- レーン空き判定 → 空きがあればランダム選択、なければ全レーンからランダムで重ねる (取りこぼし不可視化を避ける)
+- 速度ジッタ、ペイロード内 stagger
+- 文字: 白塗り + 黒縁取り (Linux 版は `Sans Bold 36` 相当)
+- 受信 JSON ペイロードの `color` / `speed` / `size` は **GUI 側で未適用** (Linux 版と同じく Phase 3 / 設定ファイル導入時に対応)
+- 画面外まで流れた弾は除去
+
+**実装タスク:**
+
+- [x] `apps/danmaku-gui-macos/` を Rust で `cargo init` (バイナリ)
+- [x] 依存追加 (`cargo add objc2 objc2-app-kit objc2-foundation`、最新版)
+- [x] 最小実装: 透過 NSPanel を空で立ち上げ (画面 75% 中央配置 / 透過 / クリックスルー / 最前面 / 全 Space)、cargo build が通る状態
+- [ ] **実機で目視確認** (透過 / クリックスルー / 最前面 / 全 Space 表示)
+- [ ] CLI 引数: `--screen N` (デフォルト 0)、対象 `NSScreen` 不在なら stderr エラー + 非ゼロ終了
+- [ ] 描画: `CATextLayer` ベースの Core Animation 駆動 (`objc2-quartz-core` を追加)、Linux 版と同じ縁取り付き白文字
+- [ ] レーン管理 / spawn ロジックを Linux 版から移植 (`max_lines=8` / `base_speed=250 px/s` / `SPEED_JITTER=0.3` / `SPAWN_GAP_SEC=1.5` / `PAYLOAD_STAGGER_MS=250`)
+- [ ] Unix domain socket listener: `std::os::unix::net::UnixListener` を別スレッドで動かし、受信メッセージは `dispatch_async` (もしくは `CFRunLoopSource`) でメインスレッドに戻す
+- [ ] 既存 socket ファイルの扱い: Linux 版 `ensure_socket_available` と同じく接続試行 → 失敗なら unlink
+- [ ] 改行区切り JSON 1 行を `serde_json` で `IncomingPayload` にデコード (`danmaku-cli` と同じ struct を共有するなら crate 化検討)
+- [ ] `screen` 不一致ペイロードは drop (Linux 版と同挙動)
+- [ ] `danmaku-cli` の `socket_path()` を OS 分岐 (Linux: `$XDG_RUNTIME_DIR/danmaku.sock` / macOS: `$TMPDIR/danmaku.sock`)
+- [ ] 実機で目視確認 (複数モニタ切替、socket 経由で弾幕が流れる)
+- [ ] `apps/danmaku-gui-macos/IMPLEMENTATION.md` に NSPanel level / collectionBehavior の選定根拠と、Rust + objc2 採用経緯を記録
+
+**着手手順 (リスクの高い順):**
+
+1. ✅ 透過 + クリックスルー + 最前面の NSPanel を空で出す (最大リスクの早期検証) — **実機検証待ち**
+2. ハードコード 1 行で右→左スクロール (描画駆動 + objc2-quartz-core API の妥当性確認)
+3. レーン / spawn / ジッタ移植
+4. Unix socket listener 実装、`danmaku-cli` 経由で疎通
+5. `danmaku-cli` の socket パス OS 分岐
+6. `--screen` でマルチモニタ配置
 
 ---
 
@@ -159,7 +214,6 @@
 
 - `getscreens` のクリーンナップ戦略（日付ローテーション / 何もしない / 既存古ファイル削除）
 - `getscreens` のリサイズフィルタを可変にする（現在 Triangle 固定）。LLM への可読性とループ頻度の体感のトレードオフで利用者が選びたくなる可能性。実装は容易（`image::imageops::FilterType` を CLI フラグまたは設定ファイル経由で受ける）。当面は Triangle 固定で運用し、必要が出てから追加
-- macOS の socket パス規約
 - macOS でのモニター列挙手段（`system_profiler` 解析か別手段か）
 - トレイメニューの項目
 - ログ・履歴機能の要否
