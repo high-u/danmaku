@@ -84,39 +84,43 @@ cron / systemd timer などの OS 機構は使わない。利用者が AI エー
 [AI エージェント CLI]
     SKILL.md を読み込み、以下のループを実行:
     │
-    │   ┌─────────────────────────────────────────────┐
-    │   │ 1. シェルから `getscreens` を実行            │
-    │   │    → JSON 配列でファイルパス等を受け取る     │
-    │   │ 2. 受け取ったパスを AI エージェント標準の    │
-    │   │    画像読み込み機能でロード                  │
-    │   │ 3. コメント生成                              │
-    │   │ 4. シェルから `danmaku-cli "..."` を実行     │
-    │   │ 5. 必要に応じて待機して 1 に戻る             │
-    │   └─────────────────────────────────────────────┘
+    │   ┌──────────────────────────────────────────────┐
+    │   │ 1. シェルから `getscreens` を実行             │
+    │   │    → JSON 配列でファイルパス等を受け取る      │
+    │   │ 2. 受け取ったパスを AI エージェント標準の     │
+    │   │    画像読み込み機能でロード                   │
+    │   │ 3. コメント生成                               │
+    │   │ 4. シェルから `danmaku-gui send "..."` を実行 │
+    │   │ 5. 必要に応じて待機して 1 に戻る              │
+    │   └──────────────────────────────────────────────┘
     │
     ▼
-[danmaku-cli] → Unix domain socket → [danmaku-gui]
-    danmaku-gui が透過オーバーレイに弾幕表示
+[`danmaku-gui send "..."`] ─ (内部 IPC) ─→ [常駐中の `danmaku-gui`]
+    常駐側が透過オーバーレイに弾幕表示
 ```
 
 各構成要素は疎結合：
 
 - `getscreens` はスクショを保存しパスを JSON で返すだけ。誰が読むかを関知しない。
-- AI エージェント CLI は `danmaku-gui` を直接知らない。シェルで `danmaku-cli` を叩くだけ。
-- `danmaku-cli` は socket に投げて即終了。
-- `danmaku-gui` は socket からメッセージを受けて表示するだけ。誰が送ったかは関知しない。
-- スキルを差し替えれば `danmaku-cli` を別コマンドに置換可能（音声合成、マスコット等）。
+- AI エージェント CLI は `danmaku-gui` の内部構造を知らない。シェルで `danmaku-gui send "..."` を叩くだけ。
+- `danmaku-gui` は単一バイナリで 2 つの動作モードを持つ:
+  - 引数なし (または `serve`): 常駐し、透過オーバーレイを表示しつつ内部 IPC で送信を待つ
+  - `send "..."`: 起動中の常駐インスタンスに対してメッセージを送り即終了
+- 2 つのモードは内部的に Unix domain socket で通信する。socket の存在は実装詳細であり、利用者・AI エージェントには `danmaku-gui send` という単一インタフェースだけが見える。
+- スキルを差し替えれば `danmaku-gui send` を別コマンド (`say` 等) に置換可能（音声合成、マスコット等）。
 
 ## アプリケーション / コマンド構成
 
-### `danmaku-cli`
+### `danmaku-gui` の送信モード (旧 `danmaku-cli` 相当)
 
-- 言語: Rust
-- クロスプラットフォーム（Linux/macOS 共通ソース、OS 別ビルド）
-- 役割: 引数を受け取り、Unix domain socket 経由で `danmaku-gui` に JSON で送信。即終了。
-- 使用例: `danmaku --screen 0 "xxx" "yyy" "zzz"`
+`danmaku-gui send` サブコマンドが送信側を担う (専用バイナリを別に用意しない方針)。
+
+- 役割: 引数を受け取り、内部 Unix domain socket 経由で常駐中の `danmaku-gui` に JSON で送信。即終了。
+- 使用例: `danmaku-gui send --screen 0 "xxx" "yyy" "zzz"`
 - フラグ案: `--screen`, `--color`, `--speed`, `--size`（設定ファイルの値を上書き）
 - socket 接続失敗時: stderr にエラーを出し非ゼロ終了。AI エージェントの出力経由でエラーが LLM 側に返る
+
+**経緯**: 初期 SPECS では `danmaku-cli` を独立バイナリとして用意していたが、(a) 結局 socket は GUI 内部で必須 (常駐 ↔ ephemeral 通信のため)、(b) 独自プロトコルの専用クライアントを別ビルド・別配布するコストに見合うメリットがない (差し替え可能性は SKILL.md 側が叩くコマンド名の問題で、別バイナリ要件とは無関係) ため、`danmaku-gui` 単一バイナリにサブコマンドとして統合した。socket は実装詳細として GUI 内部に閉じる。
 
 ### `getscreens`
 
@@ -167,7 +171,9 @@ cron / systemd timer などの OS 機構は使わない。利用者が AI エー
   - 「必要ならさらに過去のスクショも遡って文脈を取れ」
 - 「画像をプロンプトに直接添付」では LLM の自律的判断（過去を遡る等）が活かせないため、スキル化する意義がここにある
 
-## プロセス間通信
+## プロセス間通信 (実装詳細)
+
+`danmaku-gui` 単一バイナリの 2 つの動作モード (常駐 `serve` / 送信 `send`) 間の内部通信。外部 (AI エージェント / SKILL.md) からは見えない実装詳細であり、利用者は `danmaku-gui send "..."` だけを叩く。
 
 ### 方式
 
@@ -176,11 +182,11 @@ Unix domain socket（Linux/macOS 共通の POSIX 標準）
 ### Socket パス
 
 `$XDG_RUNTIME_DIR/danmaku.sock`（Linux）
-macOS は `$TMPDIR/danmaku.sock` 等（要検討）
+`$TMPDIR/danmaku.sock`（macOS、`$TMPDIR` 未設定時は `/tmp/danmaku.sock`）
 
 ### プロトコル
 
-`danmaku-cli` → `danmaku-gui` への一方向、1接続 1メッセージ、JSON 1 行（改行区切り）。
+`send` モード → 常駐 (`serve`) モードへの一方向、1接続 1メッセージ、JSON 1 行（改行区切り）。
 
 例:
 
@@ -192,7 +198,7 @@ macOS は `$TMPDIR/danmaku.sock` 等（要検討）
 - `messages`: 表示する文字列の配列（必須）
 - `color`, `speed`, `size`: オプション（指定時は設定値を上書き）
 
-GUI からの応答は当面なし（成功/失敗はソケット切断/エラーで判定）。
+常駐側からの応答は当面なし（成功/失敗はソケット切断/エラーで判定）。
 
 ## 設定ファイル
 
@@ -285,9 +291,8 @@ SKILL.md で「画面に弾幕で流せ」を「`say` コマンドで読み上�
 ```
 danmaku/
 ├── apps/
-│   ├── danmaku-cli/        # Rust (Linux/macOS 共通ソース)
-│   ├── danmaku-gui-linux/  # Rust + GTK4
-│   ├── danmaku-gui-macos/  # Rust + objc2 (AppKit)
+│   ├── danmaku-gui-linux/  # Rust + GTK4 (serve / send サブコマンド両方提供)
+│   ├── danmaku-gui-macos/  # Rust + objc2 (AppKit、serve / send サブコマンド両方提供)
 │   └── getscreens/         # Rust (maim/screencapture を内部で呼ぶハイブリッド)
 ├── skills/
 │   └── danmaku/
@@ -296,15 +301,21 @@ danmaku/
 └── NOTE.md
 ```
 
+両 OS の `danmaku-gui-*` はソースは別だが、ビルド成果物のバイナリ名はどちらも `danmaku-gui` で揃える (利用者は片方の OS でしか使わないので名前衝突しない)。
+
 ## 開発順序
 
-1. `danmaku-gui-linux` の最小プロトタイプ（X11 透過オーバーレイに文字 1 行流す）— ここで透過クリックスルー実現可否を実証
-2. `danmaku-cli` + socket 通信
+開発フェーズの最新状態は [TASKS.md](./TASKS.md) を参照。概要:
+
+1. `danmaku-gui-linux` の最小プロトタイプ（X11 透過オーバーレイに文字 1 行流す）— 透過クリックスルー実証
+2. socket 通信 + 複数行ランダム配置 (当時は `danmaku-cli` 独立バイナリで実装。後に `danmaku-gui send` サブコマンドへ統合する方針に変更)
 3. 設定ファイル読み込み
 4. `getscreens` (Rust + maim ハイブリッド、メインモニター JSON 配列出力)
 5. `skills/danmaku/SKILL.md`（Agent Skills 仕様準拠、インストール手順とループ指示）
 6. トレイアイコン実装
-7. `danmaku-gui-macos`（macOS 実機で）
+7. `danmaku-gui-linux` レーン配置の上下マージン削除
+8. `danmaku-gui-macos`（Rust + objc2、macOS 実機で、最初から `serve` / `send` サブコマンド統合形）
+9. `danmaku-cli` → `danmaku-gui-linux send` への統合 (Linux 側追従)
 
 ## 未決事項
 

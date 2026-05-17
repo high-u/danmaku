@@ -15,7 +15,8 @@
 | 5 | `skills/danmaku/SKILL.md` (Agent Skills 仕様準拠 / インストール手順 / ループ指示) | ⏳ 未着手 |
 | 6 | トレイアイコン | ⏳ 未着手 |
 | 7 | `danmaku-gui-linux` レーン配置の上下マージン削除 | ⏳ 未着手 |
-| 8 | `danmaku-gui-macos` (Rust + objc2, macOS 実機) | 🚧 着手中 |
+| 8 | `danmaku-gui-macos` (Rust + objc2, macOS 実機、`serve` / `send` 統合形) | 🚧 着手中 |
+| 9 | `danmaku-cli` を `danmaku-gui-linux send` に統合 (Linux 側追従) | ⏳ 未着手 |
 
 ---
 
@@ -168,7 +169,12 @@
   - 初期想定は Swift だったが、Xcode 非導入で swift toolchain (CLT 同梱) の不具合を踏み、また「軽量・標準・安全」の方針と合致しないため Rust に変更
   - `objc2-app-kit` は Apple SDK ヘッダから自動生成された型付き API で、winit / wgpu / Tauri / Servo / Slint 等 Rust 主要 GUI 系が採用しているため、Rust 内の事実上の標準として扱える
   - 詳細経緯は SPECS.md `danmaku-gui-macos` 節を参照
-- socket パス: `$TMPDIR/danmaku.sock` (未設定なら `/tmp/danmaku.sock`)。`danmaku-cli` 側も OS 分岐で同じ解決ロジックを追加
+- **`serve` / `send` サブコマンド統合形** で実装する (`danmaku-cli` を別バイナリにしない)。
+  - `danmaku-gui` (引数なし or `serve`): 常駐、透過オーバーレイ表示 + socket listener
+  - `danmaku-gui send "..."`: socket に書いて即終了
+  - socket は内部実装詳細として閉じる
+  - 経緯: Phase 8 着手後に「結局 socket は常駐 ↔ ephemeral 通信のため必須であり、独自プロトコルの専用クライアントを別バイナリ化する実利は薄い」と判断したため。SPECS.md `danmaku-gui` の送信モード節と全体構成節を参照
+- socket パス: `$TMPDIR/danmaku.sock` (未設定なら `/tmp/danmaku.sock`)
 - `--screen N`: `NSScreen.screens` の配列インデックスを採用 (Linux 版が `gdk::Display::monitors()` のインデックスを使うのと同じ思想)
 - ウィンドウサイズ: 対象スクリーンの高さ 75%・縦中央 (Linux 版に合わせる。macOS には Linux のような制約はないが「合わせる」)
 - レーン配置: ウィンドウ高を `max_lines` で等分。**内側上下マージンは設けない** (Phase 7 と同じ方針)
@@ -185,28 +191,49 @@
 **実装タスク:**
 
 - [x] `apps/danmaku-gui-macos/` を Rust で `cargo init` (バイナリ)
-- [x] 依存追加 (`cargo add objc2 objc2-app-kit objc2-foundation`、最新版)
-- [x] 最小実装: 透過 NSPanel を空で立ち上げ (画面 75% 中央配置 / 透過 / クリックスルー / 最前面 / 全 Space)、cargo build が通る状態
-- [ ] **実機で目視確認** (透過 / クリックスルー / 最前面 / 全 Space 表示)
-- [ ] CLI 引数: `--screen N` (デフォルト 0)、対象 `NSScreen` 不在なら stderr エラー + 非ゼロ終了
-- [ ] 描画: `CATextLayer` ベースの Core Animation 駆動 (`objc2-quartz-core` を追加)、Linux 版と同じ縁取り付き白文字
-- [ ] レーン管理 / spawn ロジックを Linux 版から移植 (`max_lines=8` / `base_speed=250 px/s` / `SPEED_JITTER=0.3` / `SPAWN_GAP_SEC=1.5` / `PAYLOAD_STAGGER_MS=250`)
-- [ ] Unix domain socket listener: `std::os::unix::net::UnixListener` を別スレッドで動かし、受信メッセージは `dispatch_async` (もしくは `CFRunLoopSource`) でメインスレッドに戻す
+- [x] 依存追加 (`cargo add objc2 objc2-app-kit objc2-foundation objc2-quartz-core objc2-core-foundation rand`、最新版)
+- [x] 着手手順 #1 透過 NSPanel 最小実装 (画面 75% 中央配置 / 透過 / クリックスルー / 最前面 / 全 Space) — 実機確認済み
+- [x] 着手手順 #2 CATextLayer + CABasicAnimation で 1 行スクロール — 実機確認済み
+- [x] 着手手順 #3 レーン管理 + 複数弾 spawn 移植 (`max_lines=8` / `base_speed=250 px/s` / `SPEED_JITTER=0.3` / `SPAWN_GAP_SEC=1.5` / `PAYLOAD_STAGGER_MS=250` 相当) — 実機確認済み
+- [ ] 着手手順 #4 サブコマンド分岐 (`clap`): 引数なし → serve、`send "..."` → 送信して即終了
+- [ ] 着手手順 #5 Unix domain socket listener (serve 内): `std::os::unix::net::UnixListener` を別スレッドで動かし、受信ペイロードをメインスレッドに channel + NSTimer (block2) で受け渡す
 - [ ] 既存 socket ファイルの扱い: Linux 版 `ensure_socket_available` と同じく接続試行 → 失敗なら unlink
-- [ ] 改行区切り JSON 1 行を `serde_json` で `IncomingPayload` にデコード (`danmaku-cli` と同じ struct を共有するなら crate 化検討)
+- [ ] 着手手順 #6 send サブコマンド実装: socket に JSON 1 行書いて即終了。失敗時 stderr + 非ゼロ終了
+- [ ] 改行区切り JSON 1 行を `serde_json` で `IncomingPayload` にデコード
 - [ ] `screen` 不一致ペイロードは drop (Linux 版と同挙動)
-- [ ] `danmaku-cli` の `socket_path()` を OS 分岐 (Linux: `$XDG_RUNTIME_DIR/danmaku.sock` / macOS: `$TMPDIR/danmaku.sock`)
-- [ ] 実機で目視確認 (複数モニタ切替、socket 経由で弾幕が流れる)
-- [ ] `apps/danmaku-gui-macos/IMPLEMENTATION.md` に NSPanel level / collectionBehavior の選定根拠と、Rust + objc2 採用経緯を記録
+- [ ] CLI 引数: `--screen N` (デフォルト 0) — 当面は serve / send 両モードで対象 screen のみ扱う
+- [ ] 完了済み弾の layer cleanup (期限切れ層を superlayer から remove)
+- [ ] 実機で目視確認 (socket 経由 = `danmaku-gui send "..."` で弾幕が流れる)
+- [ ] バイナリ名を `danmaku-gui` に揃える (`Cargo.toml` の `[[bin]] name = "danmaku-gui"`)
+- [ ] `apps/danmaku-gui-macos/IMPLEMENTATION.md` に NSPanel level / collectionBehavior の選定根拠と、Rust + objc2 採用経緯、サブコマンド統合の判断経緯を記録
 
 **着手手順 (リスクの高い順):**
 
-1. ✅ 透過 + クリックスルー + 最前面の NSPanel を空で出す (最大リスクの早期検証) — **実機検証待ち**
-2. ハードコード 1 行で右→左スクロール (描画駆動 + objc2-quartz-core API の妥当性確認)
-3. レーン / spawn / ジッタ移植
-4. Unix socket listener 実装、`danmaku-cli` 経由で疎通
-5. `danmaku-cli` の socket パス OS 分岐
-6. `--screen` でマルチモニタ配置
+1. ✅ 透過 + クリックスルー + 最前面の NSPanel を空で出す (最大リスクの早期検証)
+2. ✅ ハードコード 1 行で右→左スクロール (描画駆動 + objc2-quartz-core API の妥当性確認)
+3. ✅ レーン / spawn / ジッタ移植
+4. サブコマンド分岐 (`clap`) を main に組み込み
+5. Unix socket listener 実装 (serve モード)
+6. `send` サブコマンド実装、自己疎通テスト
+7. layer cleanup
+8. バイナリ名統一
+
+---
+
+## Phase 9: `danmaku-cli` を `danmaku-gui-linux send` に統合 ⏳
+
+**想定ブランチ名:** `refactor/unify-linux-cli`
+
+**ゴール:** Linux 側を Phase 8 で確立した「`danmaku-gui` 単一バイナリ + `serve` / `send` サブコマンド」アーキテクチャに揃える。
+
+**背景:** Phase 8 着手後に「socket は GUI 内部の常駐 ↔ ephemeral 通信のため不可避 / 独自プロトコルの専用クライアントを別バイナリ化する実利は薄い」と判断し、macOS 側を統合形で実装した。Linux 側は当初 `danmaku-cli` 独立バイナリで実装済み (Phase 2) のため、追従が必要。
+
+- [ ] `apps/danmaku-gui-linux` に `clap` でサブコマンド分岐を追加 (引数なし → serve、`send "..."` → 送信して即終了)
+- [ ] `send` サブコマンドの実装を `apps/danmaku-cli/src/main.rs` から移植 (socket 接続 + JSON 書き込み + 即終了)
+- [ ] バイナリ名を `danmaku-gui` に揃える (`Cargo.toml` の `[[bin]] name = "danmaku-gui"`)
+- [ ] `apps/danmaku-cli/` ディレクトリと関連ドキュメント・SKILL.md 参照を削除
+- [ ] 実機で目視確認 (`danmaku-gui send "..."` で弾幕が流れる、エラー時の挙動も `danmaku-cli` 相当)
+- [ ] SPECS.md / TASKS.md / IMPLEMENTATION.md の `danmaku-cli` 言及を整理
 
 ---
 
