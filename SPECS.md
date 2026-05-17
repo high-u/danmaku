@@ -313,9 +313,9 @@ danmaku/
 4. `getscreens` (Rust + maim ハイブリッド、メインモニター JSON 配列出力)
 5. `skills/danmaku/SKILL.md`（Agent Skills 仕様準拠、インストール手順とループ指示）
 6. トレイアイコン実装
-7. `danmaku-gui-linux` レーン配置の上下マージン削除
+7. `danmaku-gui-linux` レーン上下マージン削除 + `danmaku-cli` → `danmaku-gui-linux send` への統合 (Linux 側追従)
 8. `danmaku-gui-macos`（Rust + objc2、macOS 実機で、最初から `serve` / `send` サブコマンド統合形）
-9. `danmaku-cli` → `danmaku-gui-linux send` への統合 (Linux 側追従)
+9. `danmaku-gui-macos` マルチスクリーン対応 (`--screen N` の serve 側)
 
 ## 未決事項
 
