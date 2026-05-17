@@ -50,8 +50,10 @@ fn socket_path() -> Result<PathBuf, String> {
 
 fn run() -> Result<(), String> {
     let args = Args::parse();
+    let screen = args.screen;
+    let count = args.messages.len();
     let payload = Payload {
-        screen: args.screen,
+        screen,
         messages: args.messages,
         color: args.color,
         speed: args.speed,
@@ -67,6 +69,7 @@ fn run() -> Result<(), String> {
     stream
         .write_all(line.as_bytes())
         .map_err(|e| format!("failed to write to {}: {e}", path.display()))?;
+    println!("sent {count} message(s) to screen {screen}");
     Ok(())
 }
 
