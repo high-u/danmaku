@@ -1,0 +1,12 @@
+[package]
+name = "danmaku-gui-macos"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = "0.3.2"
+objc2-core-foundation = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2-quartz-core = { version = "0.3.2", default-features = false, features = ["std", "CAAnimation", "CABase", "CALayer", "CAMediaTiming", "CATextLayer", "CATransaction", "CoreAnimation", "objc2-core-foundation", "objc2-core-graphics"] }
+rand = "0.10.1"
