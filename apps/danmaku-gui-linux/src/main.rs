@@ -1,10 +1,12 @@
 use std::cell::RefCell;
+use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use gio::prelude::*;
 use gtk4::cairo;
 use gtk4::gdk;
@@ -14,33 +16,64 @@ use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow};
 use rand::seq::IteratorRandom;
 use rand::RngExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const APP_ID: &str = "io.github.danmaku.gui";
 
 // 暫定値 (設定ファイル導入は Phase 3)。
-const DEFAULT_MAX_LINES: usize = 8;
+const DEFAULT_MAX_LINES: usize = 16;
 const DEFAULT_BASE_SPEED: f64 = 250.0; // px/sec
 const SPEED_JITTER: f64 = 0.3; // ±30%
 const SPAWN_GAP_SEC: f64 = 1.5; // 同レーンに新弾を出してよい最小間隔
 const PAYLOAD_STAGGER_MS: u64 = 250; // 同一受信内メッセージの最大ずらし
+const FONT_LANE_RATIO: f64 = 0.6; // フォント絶対高 / レーン高
 
 #[derive(Parser, Debug)]
-#[command(name = "danmaku-gui-linux", about = "Danmaku overlay GUI (Linux/X11)")]
-struct Args {
-    /// 表示先ディスプレイ番号（gdk::Display::monitors() のインデックス）
-    #[arg(long, default_value_t = 0)]
-    screen: u32,
+#[command(name = "danmaku-gui", about = "Danmaku overlay GUI (Linux/X11, serve / send 統合)")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
 }
 
-#[derive(Deserialize, Debug)]
-struct IncomingPayload {
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// 常駐モード (引数なしと同義)。透過オーバーレイを表示し socket で送信を待つ。
+    Serve {
+        /// 表示先ディスプレイ番号（gdk::Display::monitors() のインデックス）
+        #[arg(long, default_value_t = 0)]
+        screen: u32,
+    },
+    /// 常駐インスタンスに JSON ペイロードを送信して即終了。
+    Send {
+        /// 表示先ディスプレイ番号
+        #[arg(long, default_value_t = 0)]
+        screen: u32,
+        /// 文字色 (常駐側の設定を上書き)
+        #[arg(long)]
+        color: Option<String>,
+        /// 速度倍率 (常駐側の設定を上書き)
+        #[arg(long)]
+        speed: Option<f64>,
+        /// フォントサイズ (常駐側の設定を上書き)
+        #[arg(long)]
+        size: Option<u32>,
+        /// 表示する文字列 (1 個以上)
+        #[arg(required = true)]
+        messages: Vec<String>,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Payload {
     screen: u32,
     messages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[allow(dead_code)]
     color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[allow(dead_code)]
     speed: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[allow(dead_code)]
     size: Option<u32>,
 }
@@ -72,12 +105,69 @@ impl DanmakuState {
     }
 }
 
-fn main() -> glib::ExitCode {
-    let args = Args::parse();
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match cli.command.unwrap_or(Command::Serve { screen: 0 }) {
+        Command::Serve { screen } => run_serve(screen),
+        Command::Send {
+            screen,
+            color,
+            speed,
+            size,
+            messages,
+        } => run_send(Payload {
+            screen,
+            messages,
+            color,
+            speed,
+            size,
+        }),
+    }
+}
+
+fn run_serve(screen: u32) -> ExitCode {
     let app = Application::builder().application_id(APP_ID).build();
-    app.connect_activate(move |app| build_ui(app, args.screen));
+    app.connect_activate(move |app| build_ui(app, screen));
     // GTK に引数を解釈させない（clap で消費済み）
-    app.run_with_args::<&str>(&[])
+    let code = app.run_with_args::<&str>(&[]);
+    ExitCode::from(u8::from(code))
+}
+
+fn run_send(payload: Payload) -> ExitCode {
+    let screen = payload.screen;
+    let count = payload.messages.len();
+    let mut line = match serde_json::to_string(&payload) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("danmaku-gui: failed to serialize payload: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    line.push('\n');
+
+    let path = match socket_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("danmaku-gui: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut stream = match UnixStream::connect(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "danmaku-gui: failed to connect to {}: {e}",
+                path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(e) = stream.write_all(line.as_bytes()) {
+        eprintln!("danmaku-gui: failed to write to {}: {e}", path.display());
+        return ExitCode::FAILURE;
+    }
+    println!("sent {count} message(s) to screen {screen}");
+    ExitCode::SUCCESS
 }
 
 fn build_ui(app: &Application, screen: u32) {
@@ -179,6 +269,9 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
     let h_f = h as f64;
     let max_lines = state.max_lines;
 
+    let lane_h = h_f / max_lines as f64;
+    let font_px = lane_h * FONT_LANE_RATIO;
+
     for bullet in &state.bullets {
         if bullet.start_time > now {
             continue;
@@ -186,12 +279,15 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
         let elapsed = now.duration_since(bullet.start_time).as_secs_f64();
 
         let layout = area.create_pango_layout(Some(&bullet.text));
-        let mut font = pango::FontDescription::from_string("Sans Bold 36");
-        font.set_absolute_size(36.0 * pango::SCALE as f64);
+        let mut font = pango::FontDescription::from_string("Sans Bold");
+        font.set_absolute_size(font_px * pango::SCALE as f64);
         layout.set_font_description(Some(&font));
 
+        let (ink, _logical) = layout.pixel_extents();
+        let lane_center = lane_y(bullet.lane, h_f, max_lines) + lane_h / 2.0;
         let x = w_f - elapsed * bullet.speed;
-        let y = lane_y(bullet.lane, h_f, max_lines);
+        // show_layout の y はレイアウト原点。ink rect の中心が lane_center に来るよう逆算。
+        let y = lane_center - ink.y() as f64 - ink.height() as f64 / 2.0;
 
         cr.move_to(x, y);
         pangocairo::functions::layout_path(cr, &layout);
@@ -206,11 +302,7 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
 }
 
 fn lane_y(lane: usize, h: f64, max_lines: usize) -> f64 {
-    // 上下に少しマージンを取り、レーンを均等配置 (テキスト top 基準)。
-    let top = h * 0.08;
-    let bottom = h * 0.08;
-    let usable = h - top - bottom;
-    top + (lane as f64) * (usable / max_lines as f64)
+    (lane as f64) * (h / max_lines as f64)
 }
 
 fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
@@ -326,7 +418,7 @@ async fn handle_connection(conn: gio::SocketConnection, state: Rc<RefCell<Danmak
 }
 
 fn process_line(line: &str, state: &Rc<RefCell<DanmakuState>>) {
-    let payload: IncomingPayload = match serde_json::from_str(line) {
+    let payload: Payload = match serde_json::from_str(line) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("danmaku-gui-linux: JSON parse failed: {e}; line={line:?}");
