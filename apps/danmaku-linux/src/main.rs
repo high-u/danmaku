@@ -29,7 +29,7 @@ const PAYLOAD_STAGGER_MS: u64 = 250; // 同一受信内メッセージの最大�
 const FONT_LANE_RATIO: f64 = 0.6; // フォント絶対高 / レーン高
 
 #[derive(Parser, Debug)]
-#[command(name = "danmaku", about = "Danmaku overlay GUI (Linux/X11, serve / send 統合)")]
+#[command(name = "danmaku", about = "Transparent danmaku overlay for Linux/X11.")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -37,27 +37,18 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// 常駐モード (引数なしと同義)。透過オーバーレイを表示し socket で送信を待つ。
+    /// Run the overlay (default when no subcommand is given).
     Serve {
-        /// 表示先ディスプレイ番号（gdk::Display::monitors() のインデックス）
+        /// Display index (from `gdk::Display::monitors()`).
         #[arg(long, default_value_t = 0)]
         screen: u32,
     },
-    /// 常駐インスタンスに JSON ペイロードを送信して即終了。
+    /// Send messages to a running serve instance and exit.
     Send {
-        /// 表示先ディスプレイ番号
+        /// Target display index.
         #[arg(long, default_value_t = 0)]
         screen: u32,
-        /// 文字色 (常駐側の設定を上書き)
-        #[arg(long)]
-        color: Option<String>,
-        /// 速度倍率 (常駐側の設定を上書き)
-        #[arg(long)]
-        speed: Option<f64>,
-        /// フォントサイズ (常駐側の設定を上書き)
-        #[arg(long)]
-        size: Option<u32>,
-        /// 表示する文字列 (1 個以上)
+        /// Messages to display (one or more).
         #[arg(required = true)]
         messages: Vec<String>,
     },
@@ -67,15 +58,6 @@ enum Command {
 struct Payload {
     screen: u32,
     messages: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)]
-    color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)]
-    speed: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)]
-    size: Option<u32>,
 }
 
 struct Bullet {
@@ -109,19 +91,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve { screen: 0 }) {
         Command::Serve { screen } => run_serve(screen),
-        Command::Send {
-            screen,
-            color,
-            speed,
-            size,
-            messages,
-        } => run_send(Payload {
-            screen,
-            messages,
-            color,
-            speed,
-            size,
-        }),
+        Command::Send { screen, messages } => run_send(Payload { screen, messages }),
     }
 }
 
