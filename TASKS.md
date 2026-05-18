@@ -19,6 +19,7 @@
 | 9 | `danmaku-gui-macos` マルチスクリーン対応 (`--screen N` の serve 側) | ⏳ 未着手 |
 | 10 | `danmaku-cli` 削除 + `danmaku-linux` リネーム + バイナリ名 `danmaku` 統一 (Linux 側) + ドキュメント追従 | ✅ 完了 |
 | 11 | `danmaku-gui-macos` レーンレイアウト追従 (Phase 7 と同等) | ⏳ 未着手 |
+| 12 | `danmaku-linux` help 英語化 + N プロセス・マルチスクリーン + `--lanes` + `max_lines`→`lanes` 改名 | ⏳ 未着手 |
 
 ---
 
@@ -306,6 +307,60 @@
 - [ ] レーン y 計算を Linux 版と同等の「ウィンドウ高等分 + テキスト中央配置」に変更
 - [ ] フォントサイズを `lane_h * k` で動的決定 (Phase 7 で詰めた係数を流用)
 - [ ] 実機で目視確認 (上下対称であること)
+
+---
+
+## Phase 12: `danmaku-linux` help 英語化 + N プロセス・マルチスクリーン + `--lanes` + 改名 ⏳
+
+**想定ブランチ名:** `feature/linux-multiscreen-lanes-help`
+
+**ゴール:** `apps/danmaku-linux` の CLI 表面 (help / フラグ / マルチスクリーン挙動 / レーン数指定) を実用形に揃え、内部識別子も「レーン」用語に統一する。
+
+**背景:**
+
+- help が日英混在で、特に `Send` の doc コメント「常駐側の設定を上書き」は実装に存在しない設定の上書きを謳っており嘘になっている (`apps/danmaku-linux/src/main.rs:46-63`)
+- `Send` の `--color` / `--speed` / `--size` は CLI 側でパースし JSON で送信するが、GUI 側で未適用 (`Payload` の各フィールドは `#[allow(dead_code)]`)。「送れるが効かない」状態でドキュメントと実装が不整合
+- マルチスクリーンは `--screen N` フラグ自体は serve / send 双方にあるが、socket パスが `$XDG_RUNTIME_DIR/danmaku.sock` 固定で **プロセス 1 つ前提**。serve 2 起動目は `ensure_socket_available` で拒否され、複数モニタ同時表示不可
+- レーン数は `DEFAULT_MAX_LINES = 16` ハードコード。実機ごとの賑やかさ調整ができない
+- `max_lines` / `DEFAULT_MAX_LINES` という識別子は Phase 7 以降の「レーン (lane)」用語と乖離。`lane_y` / `lane_h` 等の周辺識別子は lane に揃っているのに `max_lines` だけ残存
+
+**プロセスモデルの判断:** N プロセス案 (1 serve = 1 画面 = 1 socket) を採用。
+
+- serve / send が共通の `socket_path(screen)` 関数で `danmaku-{screen}.sock` を計算 → ファイルパス自体が暗黙のルーティングテーブルになる (中央レジストリ不要)
+- 現状の `DanmakuState` / レーン管理 / window 構築コードを「1 画面前提」のまま保てる
+- 「serve = 1 画面の透過オーバーレイ + 1 socket」という責務が SPECS.md の 3 系統疎結合と整合
+- 起動側の複雑さ (画面分の `&` 起動) はシェルや systemd user unit で組み立てる領域。バイナリ側に複雑さを寄せない
+- 単一画面利用者には完全に透過 (デフォルト `--screen 0` で従来通り)
+
+**実装タスク:**
+
+- [ ] **help 英語化**: `Cli::about` と各サブコマンドの doc コメントを英語に統一
+- [ ] **Send の `--color` / `--speed` / `--size` 削除**: `Command::Send` のフィールド、`Payload` の `color` / `speed` / `size` フィールド、`run_send` の構築箇所、`#[allow(dead_code)]` 抑制も同時に削除
+- [ ] **N プロセス・マルチスクリーン**:
+  - `socket_path()` を `socket_path(screen: u32) -> Result<PathBuf, String>` に変更し `danmaku-{screen}.sock` を返す
+  - `run_serve` で起動時 screen から socket パス決定
+  - `run_send` で `--screen N` から同じパスを計算して `connect()`
+  - `Payload` から `screen` フィールド削除 → `{ messages: [...] }` のみ
+  - `process_line` の screen 不一致 drop ロジック削除 (ルーティングは socket パスで完結)
+- [ ] **`--lanes` (serve のみ)**:
+  - `clap` の `value_parser!(usize).range(1..=128)` で範囲制御 (0 と 129 以上はエラー)
+  - デフォルト 16 (現状の `DEFAULT_MAX_LINES` 同値)
+  - `DanmakuState::new` に lanes 引数を追加して `lanes` フィールドに反映
+- [ ] **`max_lines` → `lanes` 改名**: `DEFAULT_MAX_LINES` → `DEFAULT_LANES`、`DanmakuState::max_lines` → `lanes`、`draw_bullets` / `spawn_messages` / `lane_y` の参照を一括更新
+- [ ] **send エラー文言** (英語 + ヒント): `danmaku: failed to connect to <path>: <e>` に続けて `hint: is 'danmaku serve --screen <N>' running?` を出す
+- [ ] `cargo build --release` でビルド成功確認
+- [ ] `danmaku --help` / `danmaku serve --help` / `danmaku send --help` の出力目視
+- [ ] `danmaku serve --lanes 0` / `--lanes 129` で範囲外エラー確認
+- [ ] 実機で `--screen 0` / `--screen 1` 並列起動して `send --screen 0` / `--screen 1` の振り分け目視 (マルチモニタ実機がある場合)
+- [ ] 未起動 screen への send で `hint:` 付きエラー文言確認
+
+**スコープ外 (今フェーズで触らない):**
+
+- `SKILL.md` / `SPECS.md` / `README.md` のマルチスクリーン仕様反映 — 実装後の運用確認を経て別途
+- `danmaku-gui-macos` 側の追従 — Phase 11 / 別フェーズに集約
+- `--color` / `--speed` / `--size` の再導入 — 必要性が出てから serve 側既定値 + 設定ファイルとして再設計
+
+**コミット粒度:** ① help 英語化 + Send dead flag 削除、② socket パス screen 化 + Payload screen 削除、③ `--lanes` 導入 + `max_lines`→`lanes` 改名 の 3 コミットを想定。
 
 ---
 
