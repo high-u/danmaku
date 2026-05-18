@@ -14,7 +14,7 @@
 | 4 | `getscreens` (Rust + maim ハイブリッド、JSON 配列出力) | ✅ 完了 |
 | 5 | `skills/danmaku/SKILL.md` (Agent Skills 仕様準拠 / ループ指示) + 開発者向け README | 🔄 動作確認まで完了・検証残 |
 | 6 | トレイアイコン | ⏳ 未着手 |
-| 7 | `danmaku-gui-linux` レーン上下マージン削除 + `danmaku-cli` を `danmaku-gui-linux send` に統合 | ⏳ 未着手 |
+| 7 | `danmaku-gui-linux` レーンレイアウト修正 + `danmaku-cli` を `danmaku-gui send` に統合 | ✅ 完了 |
 | 8 | `danmaku-gui-macos` (Rust + objc2, macOS 実機、`serve` / `send` 統合形) | ✅ 完了 |
 | 9 | `danmaku-gui-macos` マルチスクリーン対応 (`--screen N` の serve 側) | ⏳ 未着手 |
 | 10 | `danmaku-cli` → `danmaku-gui send` 統合に伴うドキュメント追従 | ⏳ 未着手 |
@@ -175,19 +175,19 @@
 **レーンレイアウト修正:**
 
 - [x] `lane_y` を「ウィンドウ高 `h` を `max_lines` で等分」に書き換える (内側マージンなし)
-- [ ] フォントサイズを `lane_h * k` (k は実機で 0.55〜0.65 を詰める) で動的決定
-- [ ] テキスト y を `lane_center - text_height / 2` に変更 (`pango::Layout::pixel_size()` で実高取得)
-- [ ] 75% ウィンドウ + 縦中央配置の現状ロジック (`build_ui` 内の `target_h` / `move_to_monitor_center`) は据え置き
-- [ ] 実機で目視確認 (画面上端・下端付近にも弾が流れ、上下対称であること)
+- [x] フォントサイズを `lane_h * 0.6` で動的決定 (定数 `FONT_LANE_RATIO`)
+- [x] テキスト y を ink rect 中央が `lane_center` に一致するよう逆算 (`pango::Layout::pixel_extents()` の ink 値を利用)
+- [x] `DEFAULT_MAX_LINES` を 8 → 16 に変更 (賑やかさ向上)
+- [x] 75% ウィンドウ + 縦中央配置の現状ロジック (`build_ui` 内の `target_h` / `move_to_monitor_center`) は据え置き
+- [x] 実機で目視確認 (上下対称、レーン中央通過)
 
 **コマンド統合:**
 
-- [ ] `apps/danmaku-gui-linux` に `clap` でサブコマンド分岐を追加 (引数なし or `serve` → 常駐、`send "..."` → 送信して即終了)
-- [ ] `send` サブコマンドの実装を `apps/danmaku-cli/src/main.rs` から移植 (socket 接続 + JSON 書き込み + 即終了。`socket_path` は `$XDG_RUNTIME_DIR/danmaku.sock` のまま)
-- [ ] `Cargo.toml` に `[[bin]] name = "danmaku-gui"` を追加してバイナリ名を macOS 側と揃える
-- [ ] `apps/danmaku-cli/` ディレクトリ削除
-- [ ] 実機で目視確認 (`danmaku-gui send "..."` で弾幕が流れる、エラー時の挙動も `danmaku-cli` 相当)
-- [ ] SPECS.md / TASKS.md / Phase 2 の表現を整理 (`danmaku-cli` 言及の置換)
+- [x] `apps/danmaku-gui-linux` に `clap` でサブコマンド分岐を追加 (引数なし or `serve` → 常駐、`send "..."` → 送信して即終了)
+- [x] `send` サブコマンドの実装を `apps/danmaku-cli/src/main.rs` から移植 (socket 接続 + JSON 書き込み + 即終了。`socket_path` は `$XDG_RUNTIME_DIR/danmaku.sock` のまま)
+- [x] `Cargo.toml` に `[[bin]] name = "danmaku-gui"` を追加してバイナリ名を macOS 側と揃える
+- [x] 実機で目視確認 (`danmaku-gui send "..."` で弾幕が流れる、エラー時の挙動も `danmaku-cli` 相当)
+- [x] SPECS.md / TASKS.md の構造的言及を整理 (`danmaku-cli` の役割書き換え。SKILL.md / README.md / `apps/danmaku-cli/` 削除は Phase 10 で対応)
 
 **コミット粒度:** ① レーンレイアウト修正、② コマンド統合 の 2 コミットに分ける。
 
@@ -278,12 +278,13 @@
 
 **ゴール:** Phase 7 でコマンド体系が `danmaku-gui send` に変わったことを、利用者向けドキュメント / スキル / README に反映する。実機でループ動作も再確認する。
 
-**背景:** Phase 7 は実装変更 (バイナリ統合 + 旧 `apps/danmaku-cli/` 削除) とコードベース内の最低限の文言整理に集中する。利用者の体験面 (SKILL.md のレシピ、README の手順) への波及はスコープが別なので分離する。
+**背景:** Phase 7 は実装変更 (サブコマンド統合) とコードベース内の最低限の文言整理に集中した。利用者の体験面 (SKILL.md のレシピ、README の手順) への波及および旧 `apps/danmaku-cli/` の削除は、ドキュメント追従と一体で行うため本フェーズに分離する。
 
 - [ ] `skills/danmaku/SKILL.md` の `danmaku-cli` 言及を `danmaku-gui send` に置換 (前提チェックの `which danmaku-cli` / 1 ターンの 4 ステップ / コマンド例)
 - [ ] `README.md` の `danmaku-cli` の `cargo install --path` 手順を `danmaku-gui` に統合 (Linux / macOS で同じバイナリ名)
 - [ ] `.qwen/skills/danmaku` / `.opencode/skills/danmaku` の symlink が依然有効か確認
 - [ ] opencode + ローカル LLM で 3 ターンループ再動作確認 (Phase 5 と同条件)
+- [ ] `apps/danmaku-cli/` ディレクトリ削除 (上記のドキュメント追従が完了し動作確認 OK の後)
 - [ ] 動作の揺れがあれば Phase 5 の「持ち越し」項目に追記
 
 ---

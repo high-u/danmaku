@@ -308,12 +308,12 @@ danmaku/
 開発フェーズの最新状態は [TASKS.md](./TASKS.md) を参照。概要:
 
 1. `danmaku-gui-linux` の最小プロトタイプ（X11 透過オーバーレイに文字 1 行流す）— 透過クリックスルー実証
-2. socket 通信 + 複数行ランダム配置 (当時は `danmaku-cli` 独立バイナリで実装。後に `danmaku-gui send` サブコマンドへ統合する方針に変更)
+2. socket 通信 + 複数行ランダム配置 (当時は `danmaku-cli` 独立バイナリで実装。Phase 7 で `danmaku-gui send` サブコマンドに統合済み)
 3. 設定ファイル読み込み
 4. `getscreens` (Rust + maim ハイブリッド、メインモニター JSON 配列出力)
 5. `skills/danmaku/SKILL.md`（Agent Skills 仕様準拠、インストール手順とループ指示）
 6. トレイアイコン実装
-7. `danmaku-gui-linux` レーン上下マージン削除 + `danmaku-cli` → `danmaku-gui-linux send` への統合 (Linux 側追従)
+7. `danmaku-gui-linux` レーンレイアウト修正 (内側マージン削除 + フォント相対化 + レーン中央配置) + `danmaku-cli` → `danmaku-gui send` への統合 (Linux 側追従)
 8. `danmaku-gui-macos`（Rust + objc2、macOS 実機で、最初から `serve` / `send` サブコマンド統合形）
 9. `danmaku-gui-macos` マルチスクリーン対応 (`--screen N` の serve 側)
 

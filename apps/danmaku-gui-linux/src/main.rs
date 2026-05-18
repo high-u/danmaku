@@ -1,10 +1,12 @@
 use std::cell::RefCell;
+use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use gio::prelude::*;
 use gtk4::cairo;
 use gtk4::gdk;
@@ -14,7 +16,7 @@ use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow};
 use rand::seq::IteratorRandom;
 use rand::RngExt;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const APP_ID: &str = "io.github.danmaku.gui";
 
@@ -27,21 +29,51 @@ const PAYLOAD_STAGGER_MS: u64 = 250; // 同一受信内メッセージの最大�
 const FONT_LANE_RATIO: f64 = 0.6; // フォント絶対高 / レーン高
 
 #[derive(Parser, Debug)]
-#[command(name = "danmaku-gui-linux", about = "Danmaku overlay GUI (Linux/X11)")]
-struct Args {
-    /// 表示先ディスプレイ番号（gdk::Display::monitors() のインデックス）
-    #[arg(long, default_value_t = 0)]
-    screen: u32,
+#[command(name = "danmaku-gui", about = "Danmaku overlay GUI (Linux/X11, serve / send 統合)")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
 }
 
-#[derive(Deserialize, Debug)]
-struct IncomingPayload {
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// 常駐モード (引数なしと同義)。透過オーバーレイを表示し socket で送信を待つ。
+    Serve {
+        /// 表示先ディスプレイ番号（gdk::Display::monitors() のインデックス）
+        #[arg(long, default_value_t = 0)]
+        screen: u32,
+    },
+    /// 常駐インスタンスに JSON ペイロードを送信して即終了。
+    Send {
+        /// 表示先ディスプレイ番号
+        #[arg(long, default_value_t = 0)]
+        screen: u32,
+        /// 文字色 (常駐側の設定を上書き)
+        #[arg(long)]
+        color: Option<String>,
+        /// 速度倍率 (常駐側の設定を上書き)
+        #[arg(long)]
+        speed: Option<f64>,
+        /// フォントサイズ (常駐側の設定を上書き)
+        #[arg(long)]
+        size: Option<u32>,
+        /// 表示する文字列 (1 個以上)
+        #[arg(required = true)]
+        messages: Vec<String>,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Payload {
     screen: u32,
     messages: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[allow(dead_code)]
     color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[allow(dead_code)]
     speed: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[allow(dead_code)]
     size: Option<u32>,
 }
@@ -73,12 +105,69 @@ impl DanmakuState {
     }
 }
 
-fn main() -> glib::ExitCode {
-    let args = Args::parse();
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    match cli.command.unwrap_or(Command::Serve { screen: 0 }) {
+        Command::Serve { screen } => run_serve(screen),
+        Command::Send {
+            screen,
+            color,
+            speed,
+            size,
+            messages,
+        } => run_send(Payload {
+            screen,
+            messages,
+            color,
+            speed,
+            size,
+        }),
+    }
+}
+
+fn run_serve(screen: u32) -> ExitCode {
     let app = Application::builder().application_id(APP_ID).build();
-    app.connect_activate(move |app| build_ui(app, args.screen));
+    app.connect_activate(move |app| build_ui(app, screen));
     // GTK に引数を解釈させない（clap で消費済み）
-    app.run_with_args::<&str>(&[])
+    let code = app.run_with_args::<&str>(&[]);
+    ExitCode::from(u8::from(code))
+}
+
+fn run_send(payload: Payload) -> ExitCode {
+    let screen = payload.screen;
+    let count = payload.messages.len();
+    let mut line = match serde_json::to_string(&payload) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("danmaku-gui: failed to serialize payload: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    line.push('\n');
+
+    let path = match socket_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("danmaku-gui: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut stream = match UnixStream::connect(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "danmaku-gui: failed to connect to {}: {e}",
+                path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    if let Err(e) = stream.write_all(line.as_bytes()) {
+        eprintln!("danmaku-gui: failed to write to {}: {e}", path.display());
+        return ExitCode::FAILURE;
+    }
+    println!("sent {count} message(s) to screen {screen}");
+    ExitCode::SUCCESS
 }
 
 fn build_ui(app: &Application, screen: u32) {
@@ -329,7 +418,7 @@ async fn handle_connection(conn: gio::SocketConnection, state: Rc<RefCell<Danmak
 }
 
 fn process_line(line: &str, state: &Rc<RefCell<DanmakuState>>) {
-    let payload: IncomingPayload = match serde_json::from_str(line) {
+    let payload: Payload = match serde_json::from_str(line) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("danmaku-gui-linux: JSON parse failed: {e}; line={line:?}");
