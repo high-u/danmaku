@@ -1,10 +1,10 @@
 [package]
-name = "danmaku-gui-linux"
+name = "danmaku-linux"
 version = "0.1.0"
 edition = "2024"
 
 [[bin]]
-name = "danmaku-gui"
+name = "danmaku"
 path = "src/main.rs"
 
 [dependencies]

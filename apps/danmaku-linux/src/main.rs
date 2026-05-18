@@ -29,7 +29,7 @@ const PAYLOAD_STAGGER_MS: u64 = 250; // 同一受信内メッセージの最大�
 const FONT_LANE_RATIO: f64 = 0.6; // フォント絶対高 / レーン高
 
 #[derive(Parser, Debug)]
-#[command(name = "danmaku-gui", about = "Danmaku overlay GUI (Linux/X11, serve / send 統合)")]
+#[command(name = "danmaku", about = "Danmaku overlay GUI (Linux/X11, serve / send 統合)")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -139,7 +139,7 @@ fn run_send(payload: Payload) -> ExitCode {
     let mut line = match serde_json::to_string(&payload) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("danmaku-gui: failed to serialize payload: {e}");
+            eprintln!("danmaku: failed to serialize payload: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -148,7 +148,7 @@ fn run_send(payload: Payload) -> ExitCode {
     let path = match socket_path() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("danmaku-gui: {e}");
+            eprintln!("danmaku: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -156,14 +156,14 @@ fn run_send(payload: Payload) -> ExitCode {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "danmaku-gui: failed to connect to {}: {e}",
+                "danmaku: failed to connect to {}: {e}",
                 path.display()
             );
             return ExitCode::FAILURE;
         }
     };
     if let Err(e) = stream.write_all(line.as_bytes()) {
-        eprintln!("danmaku-gui: failed to write to {}: {e}", path.display());
+        eprintln!("danmaku: failed to write to {}: {e}", path.display());
         return ExitCode::FAILURE;
     }
     println!("sent {count} message(s) to screen {screen}");
@@ -205,7 +205,7 @@ fn build_ui(app: &Application, screen: u32) {
     let monitor = match monitor_for_screen(screen) {
         Some(m) => m,
         None => {
-            eprintln!("danmaku-gui-linux: monitor #{screen} not found; aborting");
+            eprintln!("danmaku: monitor #{screen} not found; aborting");
             app.quit();
             return;
         }
@@ -251,9 +251,9 @@ fn build_ui(app: &Application, screen: u32) {
 
     // socket listener を起動
     match start_socket_listener(state.clone()) {
-        Ok(path) => eprintln!("danmaku-gui-linux: listening on {}", path.display()),
+        Ok(path) => eprintln!("danmaku: listening on {}", path.display()),
         Err(e) => {
-            eprintln!("danmaku-gui-linux: failed to start socket listener: {e}");
+            eprintln!("danmaku: failed to start socket listener: {e}");
             app.quit();
         }
     }
@@ -321,7 +321,7 @@ fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
         } else {
             let l = rng.random_range(0..state.max_lines);
             eprintln!(
-                "danmaku-gui-linux: no free lane; overlapping on lane {l}: {msg:?}"
+                "danmaku: no free lane; overlapping on lane {l}: {msg:?}"
             );
             l
         };
@@ -389,7 +389,7 @@ fn start_socket_listener(state: Rc<RefCell<DanmakuState>>) -> Result<PathBuf, St
                     });
                 }
                 Err(e) => {
-                    eprintln!("danmaku-gui-linux: accept failed: {e}");
+                    eprintln!("danmaku: accept failed: {e}");
                     break;
                 }
             }
@@ -410,7 +410,7 @@ async fn handle_connection(conn: gio::SocketConnection, state: Rc<RefCell<Danmak
             }
             Ok(None) => break, // EOF
             Err(e) => {
-                eprintln!("danmaku-gui-linux: read failed: {e}");
+                eprintln!("danmaku: read failed: {e}");
                 break;
             }
         }
@@ -421,14 +421,14 @@ fn process_line(line: &str, state: &Rc<RefCell<DanmakuState>>) {
     let payload: Payload = match serde_json::from_str(line) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("danmaku-gui-linux: JSON parse failed: {e}; line={line:?}");
+            eprintln!("danmaku: JSON parse failed: {e}; line={line:?}");
             return;
         }
     };
     let mut st = state.borrow_mut();
     if payload.screen != st.screen {
         eprintln!(
-            "danmaku-gui-linux: screen mismatch (got {}, expected {}); dropping",
+            "danmaku: screen mismatch (got {}, expected {}); dropping",
             payload.screen, st.screen
         );
         return;
