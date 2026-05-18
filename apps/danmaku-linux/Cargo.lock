@@ -176,7 +176,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "danmaku-gui-linux"
+name = "danmaku-linux"
 version = "0.1.0"
 dependencies = [
  "cairo-rs",

@@ -34,7 +34,7 @@ PC 画面のスクリーンショットを定期取得し、AI エージェン�
 
 ### 何を変えれば挙動が変わるかが直感的
 
-- 出力を弾幕 → 音声合成にしたい: SKILL.md を書き換え、`danmaku-cli` の代わりに `say` 等を叩かせる。GUI アプリ自体が不要になる。
+- 出力を弾幕 → 音声合成にしたい: SKILL.md を書き換え、`danmaku send` の代わりに `say` 等を叩かせる。GUI アプリ自体が不要になる。
 - スクショの取り方を変えたい: `getscreens` の内部実装だけ差し替え。
 - 観察観点を変えたい: SKILL.md のプロンプト指示だけ書き換え。
 
@@ -90,37 +90,37 @@ cron / systemd timer などの OS 機構は使わない。利用者が AI エー
     │   │ 2. 受け取ったパスを AI エージェント標準の     │
     │   │    画像読み込み機能でロード                   │
     │   │ 3. コメント生成                               │
-    │   │ 4. シェルから `danmaku-gui send "..."` を実行 │
+    │   │ 4. シェルから `danmaku send "..."` を実行     │
     │   │ 5. 必要に応じて待機して 1 に戻る              │
     │   └──────────────────────────────────────────────┘
     │
     ▼
-[`danmaku-gui send "..."`] ─ (内部 IPC) ─→ [常駐中の `danmaku-gui`]
+[`danmaku send "..."`] ─ (内部 IPC) ─→ [常駐中の `danmaku`]
     常駐側が透過オーバーレイに弾幕表示
 ```
 
 各構成要素は疎結合：
 
 - `getscreens` はスクショを保存しパスを JSON で返すだけ。誰が読むかを関知しない。
-- AI エージェント CLI は `danmaku-gui` の内部構造を知らない。シェルで `danmaku-gui send "..."` を叩くだけ。
-- `danmaku-gui` は単一バイナリで 2 つの動作モードを持つ:
+- AI エージェント CLI は `danmaku` の内部構造を知らない。シェルで `danmaku send "..."` を叩くだけ。
+- `danmaku` は単一バイナリで 2 つの動作モードを持つ:
   - 引数なし (または `serve`): 常駐し、透過オーバーレイを表示しつつ内部 IPC で送信を待つ
   - `send "..."`: 起動中の常駐インスタンスに対してメッセージを送り即終了
-- 2 つのモードは内部的に Unix domain socket で通信する。socket の存在は実装詳細であり、利用者・AI エージェントには `danmaku-gui send` という単一インタフェースだけが見える。
-- スキルを差し替えれば `danmaku-gui send` を別コマンド (`say` 等) に置換可能（音声合成、マスコット等）。
+- 2 つのモードは内部的に Unix domain socket で通信する。socket の存在は実装詳細であり、利用者・AI エージェントには `danmaku send` という単一インタフェースだけが見える。
+- スキルを差し替えれば `danmaku send` を別コマンド (`say` 等) に置換可能（音声合成、マスコット等）。
 
 ## アプリケーション / コマンド構成
 
-### `danmaku-gui` の送信モード (旧 `danmaku-cli` 相当)
+### `danmaku` の送信モード (旧 `danmaku-cli` 相当)
 
-`danmaku-gui send` サブコマンドが送信側を担う (専用バイナリを別に用意しない方針)。
+`danmaku send` サブコマンドが送信側を担う (専用バイナリを別に用意しない方針)。
 
-- 役割: 引数を受け取り、内部 Unix domain socket 経由で常駐中の `danmaku-gui` に JSON で送信。即終了。
-- 使用例: `danmaku-gui send --screen 0 "xxx" "yyy" "zzz"`
+- 役割: 引数を受け取り、内部 Unix domain socket 経由で常駐中の `danmaku` に JSON で送信。即終了。
+- 使用例: `danmaku send --screen 0 "xxx" "yyy" "zzz"`
 - フラグ案: `--screen`, `--color`, `--speed`, `--size`（設定ファイルの値を上書き）
 - socket 接続失敗時: stderr にエラーを出し非ゼロ終了。AI エージェントの出力経由でエラーが LLM 側に返る
 
-**経緯**: 初期 SPECS では `danmaku-cli` を独立バイナリとして用意していたが、(a) 結局 socket は GUI 内部で必須 (常駐 ↔ ephemeral 通信のため)、(b) 独自プロトコルの専用クライアントを別ビルド・別配布するコストに見合うメリットがない (差し替え可能性は SKILL.md 側が叩くコマンド名の問題で、別バイナリ要件とは無関係) ため、`danmaku-gui` 単一バイナリにサブコマンドとして統合した。socket は実装詳細として GUI 内部に閉じる。
+**経緯**: 初期 SPECS では `danmaku-cli` を独立バイナリとして用意していたが、(a) 結局 socket は GUI 内部で必須 (常駐 ↔ ephemeral 通信のため)、(b) 独自プロトコルの専用クライアントを別ビルド・別配布するコストに見合うメリットがない (差し替え可能性は SKILL.md 側が叩くコマンド名の問題で、別バイナリ要件とは無関係) ため、`danmaku` 単一バイナリにサブコマンドとして統合した。socket は実装詳細として GUI 内部に閉じる。
 
 ### `getscreens`
 
@@ -143,7 +143,7 @@ cron / systemd timer などの OS 機構は使わない。利用者が AI エー
 - スクショ取得そのものを目的とする独立コマンドであり、弾幕の存在を知らない。他のスキルやスクリプトからも単独で使える
 - ImageMagick 依存は持たない（`image` クレートが純 Rust でリサイズを担う）
 
-### `danmaku-gui-linux`
+### `danmaku-linux`
 
 - 言語: Rust
 - GUI: GTK4 (`gtk4-rs`)
@@ -173,7 +173,7 @@ cron / systemd timer などの OS 機構は使わない。利用者が AI エー
 
 ## プロセス間通信 (実装詳細)
 
-`danmaku-gui` 単一バイナリの 2 つの動作モード (常駐 `serve` / 送信 `send`) 間の内部通信。外部 (AI エージェント / SKILL.md) からは見えない実装詳細であり、利用者は `danmaku-gui send "..."` だけを叩く。
+`danmaku` 単一バイナリの 2 つの動作モード (常駐 `serve` / 送信 `send`) 間の内部通信。外部 (AI エージェント / SKILL.md) からは見えない実装詳細であり、利用者は `danmaku send "..."` だけを叩く。
 
 ### 方式
 
@@ -223,11 +223,11 @@ path = ""        # 空なら OS 既定
 
 > スクショ取得間隔・継続時間などは利用者がプロンプトで指定する（アプリ設定にしない）。SKILL.md は AI エージェントが解釈すべき指示の形式を定義する。
 
-## 常駐プロセス（`danmaku-gui`）の方針
+## 常駐プロセス（`danmaku`）の方針
 
 - ユーザーが意識できる形で常駐する（トレイアイコンで明示）
 - 「裏で勝手に立ち上がる」挙動はしない
-- **`danmaku-gui` はコマンドで手動起動できることを基本機能とする**。これがすべての応用の土台になる: OS の自動起動機構 (systemd user service / launchd) への組み込み、AI エージェントによるシェル経由起動、ユーザの動作検証のいずれもが、この「コマンドから起動可能」という基本機能の上に成立する。自動起動の組み込み是非は、まず手動起動で動作検証してから判断する。**この基本機能は将来も維持すること（削除・隠蔽しないこと）。**
+- **`danmaku` はコマンドで手動起動できることを基本機能とする**。これがすべての応用の土台になる: OS の自動起動機構 (systemd user service / launchd) への組み込み、AI エージェントによるシェル経由起動、ユーザの動作検証のいずれもが、この「コマンドから起動可能」という基本機能の上に成立する。自動起動の組み込み是非は、まず手動起動で動作検証してから判断する。**この基本機能は将来も維持すること（削除・隠蔽しないこと）。**
 - トレイアイコン実装は後追い
 
 ## Agent Skill
@@ -273,26 +273,26 @@ gh skill install <owner>/danmaku
 
 - フロントマター: `name: danmaku`, `description`（弾幕生成の用途と、いつスキルを使うべきかを具体的なキーワード込みで記述）, `compatibility`（X11, GTK4, maim, xrandr 等）
 - 弾幕の用途と前提（ローカル LLM、X11、シェル実行可能な AI エージェント）
-- `danmaku-cli` / `getscreens` の使い方（シェルコマンド例、JSON 出力の読み方）
-- `danmaku-gui` のインストール手順（OS 別、ビルド or バイナリ取得）と**手動起動手順の案内**
+- `danmaku send` / `getscreens` の使い方（シェルコマンド例、JSON 出力の読み方）
+- `danmaku` のインストール手順（OS 別、ビルド or バイナリ取得）と**手動起動手順の案内**
 - 設定ファイル (`~/.config/danmaku/config.toml`) の生成手順
 - AI エージェントへの自律的振る舞いの指示:
   - 利用者の自然言語指示 (例: 「10 分間繰り返して」) をどう解釈してループするか
-  - 1 ターンの流れ: `getscreens` 実行 → JSON のパスを画像読み込み機能でロード → コメント生成 → `danmaku-cli` 実行
+  - 1 ターンの流れ: `getscreens` 実行 → JSON のパスを画像読み込み機能でロード → コメント生成 → `danmaku send` 実行
   - 何を観察するか、どうコメントするか（過去スクショを参照する場合の指示含む）
   - 終了条件の判断
 
 ### 出力先の差し替え
 
-SKILL.md で「画面に弾幕で流せ」を「`say` コマンドで読み上げよ」「マスコットアプリ XXX に投げよ」と書き換えれば、出力先が変わる。`danmaku-gui` も `danmaku-cli` も不要になり、構成要素を取り外して別の道具を組み合わせるだけで別ユースケースが成立する。これがスキル中心設計の利点。
+SKILL.md で「画面に弾幕で流せ」を「`say` コマンドで読み上げよ」「マスコットアプリ XXX に投げよ」と書き換えれば、出力先が変わる。`danmaku` 一式が不要になり、構成要素を取り外して別の道具を組み合わせるだけで別ユースケースが成立する。これがスキル中心設計の利点。
 
 ## モノレポ構成
 
 ```
 danmaku/
 ├── apps/
-│   ├── danmaku-gui-linux/  # Rust + GTK4 (serve / send サブコマンド両方提供)
-│   ├── danmaku-gui-macos/  # Rust + objc2 (AppKit、serve / send サブコマンド両方提供)
+│   ├── danmaku-linux/      # Rust + GTK4 (serve / send サブコマンド両方提供、バイナリ名 `danmaku`)
+│   ├── danmaku-gui-macos/  # Rust + objc2 (AppKit、serve / send サブコマンド両方提供、バイナリ名は現状 `danmaku-gui`、追従は別フェーズ)
 │   └── getscreens/         # Rust (maim/screencapture を内部で呼ぶハイブリッド)
 ├── skills/
 │   └── danmaku/
@@ -301,19 +301,19 @@ danmaku/
 └── NOTE.md
 ```
 
-両 OS の `danmaku-gui-*` はソースは別だが、ビルド成果物のバイナリ名はどちらも `danmaku-gui` で揃える (利用者は片方の OS でしか使わないので名前衝突しない)。
+両 OS のソースは別だが、ビルド成果物のバイナリ名はどちらも `danmaku` で揃える方針 (利用者は片方の OS でしか使わないので名前衝突しない)。Linux 側は本フェーズで揃えた。macOS 側 (`apps/danmaku-gui-macos/`、現バイナリ名 `danmaku-gui`) は別フェーズで追従する。
 
 ## 開発順序
 
 開発フェーズの最新状態は [TASKS.md](./TASKS.md) を参照。概要:
 
-1. `danmaku-gui-linux` の最小プロトタイプ（X11 透過オーバーレイに文字 1 行流す）— 透過クリックスルー実証
-2. socket 通信 + 複数行ランダム配置 (当時は `danmaku-cli` 独立バイナリで実装。Phase 7 で `danmaku-gui send` サブコマンドに統合済み)
+1. `danmaku-linux` の最小プロトタイプ（X11 透過オーバーレイに文字 1 行流す）— 透過クリックスルー実証
+2. socket 通信 + 複数行ランダム配置 (当時は `danmaku-cli` 独立バイナリで実装。Phase 7 で `danmaku send` サブコマンドに統合済み)
 3. 設定ファイル読み込み
 4. `getscreens` (Rust + maim ハイブリッド、メインモニター JSON 配列出力)
 5. `skills/danmaku/SKILL.md`（Agent Skills 仕様準拠、インストール手順とループ指示）
 6. トレイアイコン実装
-7. `danmaku-gui-linux` レーンレイアウト修正 (内側マージン削除 + フォント相対化 + レーン中央配置) + `danmaku-cli` → `danmaku-gui send` への統合 (Linux 側追従)
+7. `danmaku-linux` レーンレイアウト修正 (内側マージン削除 + フォント相対化 + レーン中央配置) + `danmaku-cli` → `danmaku send` への統合 (Linux 側追従)
 8. `danmaku-gui-macos`（Rust + objc2、macOS 実機で、最初から `serve` / `send` サブコマンド統合形）
 9. `danmaku-gui-macos` マルチスクリーン対応 (`--screen N` の serve 側)
 
@@ -327,5 +327,5 @@ danmaku/
 
 ## 実装ノート (アプリ別)
 
-- danmaku-gui-linux: [apps/danmaku-gui-linux/IMPLEMENTATION.md](apps/danmaku-gui-linux/IMPLEMENTATION.md) — X11 オーバーレイの実装根拠と分類
+- danmaku-linux: [apps/danmaku-linux/IMPLEMENTATION.md](apps/danmaku-linux/IMPLEMENTATION.md) — X11 オーバーレイの実装根拠と分類
 

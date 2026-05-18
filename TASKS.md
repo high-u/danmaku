@@ -17,7 +17,7 @@
 | 7 | `danmaku-gui-linux` レーンレイアウト修正 + `danmaku-cli` を `danmaku-gui send` に統合 | ✅ 完了 |
 | 8 | `danmaku-gui-macos` (Rust + objc2, macOS 実機、`serve` / `send` 統合形) | ✅ 完了 |
 | 9 | `danmaku-gui-macos` マルチスクリーン対応 (`--screen N` の serve 側) | ⏳ 未着手 |
-| 10 | `danmaku-cli` → `danmaku-gui send` 統合に伴うドキュメント追従 | ⏳ 未着手 |
+| 10 | `danmaku-cli` 削除 + `danmaku-linux` リネーム + バイナリ名 `danmaku` 統一 (Linux 側) + ドキュメント追従 | ✅ 完了 |
 | 11 | `danmaku-gui-macos` レーンレイアウト追従 (Phase 7 と同等) | ⏳ 未着手 |
 
 ---
@@ -35,7 +35,7 @@
 - [x] 右→左に文字をスクロール（pangocairo で日本語対応）
 - [x] 実機で目視確認
 
-実装の整理 (公式準拠 / 一般的アプローチ / ハック的の分類、事実と解釈の区別、Mutter ソース参照箇所) は [apps/danmaku-gui-linux/IMPLEMENTATION.md](./apps/danmaku-gui-linux/IMPLEMENTATION.md) に記録。
+実装の整理 (公式準拠 / 一般的アプローチ / ハック的の分類、事実と解釈の区別、Mutter ソース参照箇所) は [apps/danmaku-linux/IMPLEMENTATION.md](./apps/danmaku-linux/IMPLEMENTATION.md) に記録。
 
 ---
 
@@ -168,7 +168,7 @@
 1. レーン配置を「内側マージン削除 + フォントサイズをレーン高から相対決定 + テキストをレーン中央に配置」に修正
 2. `danmaku-cli` を `danmaku-gui-linux send` サブコマンドに統合し、macOS 側 (Phase 8) と同じ `danmaku-gui` 単一バイナリ + `serve` / `send` アーキテクチャに揃える
 
-**背景 (1: レーンレイアウト):** ウィンドウは既に画面高さの 75%・縦中央配置で、外側に十分な余白がある (これは X11/GTK4 でフルスクリーン扱いされる挙動の回避という Linux 固有の制約に由来)。にもかかわらず現状の `lane_y` (`apps/danmaku-gui-linux/src/main.rs:208-214`) は更に上下 8% を引いた 84% の領域に弾を詰めており、二重マージンになっている。加えてフォントサイズが絶対値 (36px) で固定され、テキスト y はレーン上端基準のため、`max_lines` 等分時に最終レーンの下に大きな空きが生じ上下非対称になっていた。マージン削除だけでは症状が残るため、同根の問題として一括で修正する: ① 内側マージン削除、② フォントサイズをレーン高から相対 (`lane_h * 0.55〜0.65` を実機で詰める)、③ pango の `pixel_size()` で実描画高を取りレーン中央に配置。
+**背景 (1: レーンレイアウト):** ウィンドウは既に画面高さの 75%・縦中央配置で、外側に十分な余白がある (これは X11/GTK4 でフルスクリーン扱いされる挙動の回避という Linux 固有の制約に由来)。にもかかわらず現状の `lane_y` (`apps/danmaku-linux/src/main.rs:208-214`) は更に上下 8% を引いた 84% の領域に弾を詰めており、二重マージンになっている。加えてフォントサイズが絶対値 (36px) で固定され、テキスト y はレーン上端基準のため、`max_lines` 等分時に最終レーンの下に大きな空きが生じ上下非対称になっていた。マージン削除だけでは症状が残るため、同根の問題として一括で修正する: ① 内側マージン削除、② フォントサイズをレーン高から相対 (`lane_h * 0.55〜0.65` を実機で詰める)、③ pango の `pixel_size()` で実描画高を取りレーン中央に配置。
 
 **背景 (2: 統合):** Phase 8 着手後の対話で「socket は GUI 内部の常駐 ↔ ephemeral 通信のため不可避であり、独自プロトコルの専用クライアントを別バイナリ化する実利は薄い」と判断し、macOS 側を統合形で実装した。Linux 側は当初 `danmaku-cli` 独立バイナリで実装済み (Phase 2) のため、追従が必要。Linux と macOS は開発機が異なるためフェーズを分ける。
 
@@ -272,20 +272,26 @@
 
 ---
 
-## Phase 10: `danmaku-cli` → `danmaku-gui send` 統合に伴うドキュメント追従 ⏳
+## Phase 10: `danmaku-cli` 削除 + `danmaku-linux` リネーム + バイナリ名統一 + ドキュメント追従 ✅
 
-**想定ブランチ名:** `docs/danmaku-cli-rename`
+**ブランチ:** `refactor/linux-rename-after-cli-merge`
 
-**ゴール:** Phase 7 でコマンド体系が `danmaku-gui send` に変わったことを、利用者向けドキュメント / スキル / README に反映する。実機でループ動作も再確認する。
+**ゴール:** Phase 7 でコマンド体系が `danmaku send` に統合されたことを受け、Linux 側のディレクトリ・バイナリ名・ドキュメントを最終形に揃える。macOS 側は触らない (Phase 11 で追従)。
 
-**背景:** Phase 7 は実装変更 (サブコマンド統合) とコードベース内の最低限の文言整理に集中した。利用者の体験面 (SKILL.md のレシピ、README の手順) への波及および旧 `apps/danmaku-cli/` の削除は、ドキュメント追従と一体で行うため本フェーズに分離する。
+**背景:** Phase 7 は実装変更 (サブコマンド統合) とコードベース内の最低限の文言整理に集中した。利用者の体験面 (SKILL.md のレシピ、README の手順)、ディレクトリ構成 (旧 `apps/danmaku-cli/`, `apps/danmaku-gui-linux/`)、バイナリ名の最終形 (`danmaku`) への追従を本フェーズで一括で行う。
 
-- [ ] `skills/danmaku/SKILL.md` の `danmaku-cli` 言及を `danmaku-gui send` に置換 (前提チェックの `which danmaku-cli` / 1 ターンの 4 ステップ / コマンド例)
-- [ ] `README.md` の `danmaku-cli` の `cargo install --path` 手順を `danmaku-gui` に統合 (Linux / macOS で同じバイナリ名)
-- [ ] `.qwen/skills/danmaku` / `.opencode/skills/danmaku` の symlink が依然有効か確認
-- [ ] opencode + ローカル LLM で 3 ターンループ再動作確認 (Phase 5 と同条件)
-- [ ] `apps/danmaku-cli/` ディレクトリ削除 (上記のドキュメント追従が完了し動作確認 OK の後)
-- [ ] 動作の揺れがあれば Phase 5 の「持ち越し」項目に追記
+- [x] `apps/danmaku-cli/` ディレクトリ削除
+- [x] `apps/danmaku-gui-linux/` → `apps/danmaku-linux/` にリネーム (`git mv`)
+- [x] `Cargo.toml`: パッケージ名 `danmaku-gui-linux` → `danmaku-linux`、バイナリ名 `danmaku-gui` → `danmaku`
+- [x] `src/main.rs`: `clap` の `name` 属性とログプレフィクスを `danmaku` に統一
+- [x] `cargo build --release` でビルド成功確認
+- [x] `skills/danmaku/SKILL.md` の `danmaku-cli` 言及を `danmaku send` に置換、`pgrep -f danmaku-gui-linux` を `pgrep -x danmaku` に
+- [x] `README.md` の手順を `apps/danmaku-linux` / `danmaku` バイナリに更新
+- [x] `SPECS.md` の Linux 側および両 OS 共通の表現を `danmaku` 統一に書き換え (macOS 固有節は据え置き)
+- [x] `.qwen/skills/danmaku` / `.opencode/skills/danmaku` の symlink は `skills/danmaku` を指したままで影響なし (確認済み)
+- [ ] opencode + ローカル LLM で 3 ターンループ再動作確認 (Phase 5 と同条件) — 実機で別途
+
+**Phase 11 に持ち越し:** macOS 側 (`apps/danmaku-gui-macos/`) のディレクトリ名・バイナリ名 (`danmaku-gui` → `danmaku`) 追従。
 
 ---
 
