@@ -17,6 +17,8 @@
 | 7 | `danmaku-gui-linux` レーン上下マージン削除 + `danmaku-cli` を `danmaku-gui-linux send` に統合 | ⏳ 未着手 |
 | 8 | `danmaku-gui-macos` (Rust + objc2, macOS 実機、`serve` / `send` 統合形) | ✅ 完了 |
 | 9 | `danmaku-gui-macos` マルチスクリーン対応 (`--screen N` の serve 側) | ⏳ 未着手 |
+| 10 | `danmaku-cli` → `danmaku-gui send` 統合に伴うドキュメント追従 | ⏳ 未着手 |
+| 11 | `danmaku-gui-macos` レーンレイアウト追従 (Phase 7 と同等) | ⏳ 未着手 |
 
 ---
 
@@ -157,24 +159,26 @@
 
 ---
 
-## Phase 7: `danmaku-gui-linux` レーンマージン削除 + `danmaku-cli` 統合 ⏳
+## Phase 7: `danmaku-gui-linux` レーンレイアウト修正 + `danmaku-cli` 統合 ⏳
 
-**想定ブランチ名:** `refactor/linux-cleanup`
+**ブランチ:** `refactor/integrate-cli-into-gui-linux`
 
 **ゴール:** Linux 側を 2 つまとめて整える。
 
-1. レーン y 座標計算からウィンドウ内側の上下 8% マージンを削除
+1. レーン配置を「内側マージン削除 + フォントサイズをレーン高から相対決定 + テキストをレーン中央に配置」に修正
 2. `danmaku-cli` を `danmaku-gui-linux send` サブコマンドに統合し、macOS 側 (Phase 8) と同じ `danmaku-gui` 単一バイナリ + `serve` / `send` アーキテクチャに揃える
 
-**背景 (1: マージン):** ウィンドウは既に画面高さの 75%・縦中央配置で、外側に十分な余白がある (これは X11/GTK4 でフルスクリーン扱いされる挙動の回避という Linux 固有の制約に由来)。にもかかわらず現状の `lane_y` (`apps/danmaku-gui-linux/src/main.rs:208-214`) は更に上下 8% を引いた 84% の領域に弾を詰めており、二重マージンになっている。SPECS / 設計議論で一度も出ていない値であり、画面端に流れない不自然さの原因にもなっている。**害悪**として削除する。
+**背景 (1: レーンレイアウト):** ウィンドウは既に画面高さの 75%・縦中央配置で、外側に十分な余白がある (これは X11/GTK4 でフルスクリーン扱いされる挙動の回避という Linux 固有の制約に由来)。にもかかわらず現状の `lane_y` (`apps/danmaku-gui-linux/src/main.rs:208-214`) は更に上下 8% を引いた 84% の領域に弾を詰めており、二重マージンになっている。加えてフォントサイズが絶対値 (36px) で固定され、テキスト y はレーン上端基準のため、`max_lines` 等分時に最終レーンの下に大きな空きが生じ上下非対称になっていた。マージン削除だけでは症状が残るため、同根の問題として一括で修正する: ① 内側マージン削除、② フォントサイズをレーン高から相対 (`lane_h * 0.55〜0.65` を実機で詰める)、③ pango の `pixel_size()` で実描画高を取りレーン中央に配置。
 
 **背景 (2: 統合):** Phase 8 着手後の対話で「socket は GUI 内部の常駐 ↔ ephemeral 通信のため不可避であり、独自プロトコルの専用クライアントを別バイナリ化する実利は薄い」と判断し、macOS 側を統合形で実装した。Linux 側は当初 `danmaku-cli` 独立バイナリで実装済み (Phase 2) のため、追従が必要。Linux と macOS は開発機が異なるためフェーズを分ける。
 
-**マージン削除:**
+**レーンレイアウト修正:**
 
-- [ ] `lane_y` を「ウィンドウ高 `h` を `max_lines` で等分し、各レーンに割り当てる」式に書き換える (内側マージンなし)
+- [x] `lane_y` を「ウィンドウ高 `h` を `max_lines` で等分」に書き換える (内側マージンなし)
+- [ ] フォントサイズを `lane_h * k` (k は実機で 0.55〜0.65 を詰める) で動的決定
+- [ ] テキスト y を `lane_center - text_height / 2` に変更 (`pango::Layout::pixel_size()` で実高取得)
 - [ ] 75% ウィンドウ + 縦中央配置の現状ロジック (`build_ui` 内の `target_h` / `move_to_monitor_center`) は据え置き
-- [ ] 実機で目視確認 (画面上端・下端付近にも弾が流れること)
+- [ ] 実機で目視確認 (画面上端・下端付近にも弾が流れ、上下対称であること)
 
 **コマンド統合:**
 
@@ -184,6 +188,10 @@
 - [ ] `apps/danmaku-cli/` ディレクトリ削除
 - [ ] 実機で目視確認 (`danmaku-gui send "..."` で弾幕が流れる、エラー時の挙動も `danmaku-cli` 相当)
 - [ ] SPECS.md / TASKS.md / Phase 2 の表現を整理 (`danmaku-cli` 言及の置換)
+
+**コミット粒度:** ① レーンレイアウト修正、② コマンド統合 の 2 コミットに分ける。
+
+**拡張案 (本フェーズ対象外、タスク化もしない):** 文字数連動またはランダムで 3 サイズ可変 (例: `lane_h * 3/6, 4/6, 5/6`)。賑やかさ向上が目的で本フェーズのスコープを越える。必要が出てから検討。
 
 ---
 
@@ -261,6 +269,36 @@
 - [ ] 受信ペイロードの `screen` フィールドと serve 側 screen の一致チェック、不一致なら drop (Linux 版 `danmaku-gui-linux:336-343` 相当)
 - [ ] パネル配置を `NSScreen.frame` ベースで計算 (現状 `screen_frame` を直接使っているが、副ディスプレイ座標系でも正しく動くこと)
 - [ ] 実機で目視確認 (複数モニタ環境、各 screen 番号で対象モニタに弾幕が出ること)
+
+---
+
+## Phase 10: `danmaku-cli` → `danmaku-gui send` 統合に伴うドキュメント追従 ⏳
+
+**想定ブランチ名:** `docs/danmaku-cli-rename`
+
+**ゴール:** Phase 7 でコマンド体系が `danmaku-gui send` に変わったことを、利用者向けドキュメント / スキル / README に反映する。実機でループ動作も再確認する。
+
+**背景:** Phase 7 は実装変更 (バイナリ統合 + 旧 `apps/danmaku-cli/` 削除) とコードベース内の最低限の文言整理に集中する。利用者の体験面 (SKILL.md のレシピ、README の手順) への波及はスコープが別なので分離する。
+
+- [ ] `skills/danmaku/SKILL.md` の `danmaku-cli` 言及を `danmaku-gui send` に置換 (前提チェックの `which danmaku-cli` / 1 ターンの 4 ステップ / コマンド例)
+- [ ] `README.md` の `danmaku-cli` の `cargo install --path` 手順を `danmaku-gui` に統合 (Linux / macOS で同じバイナリ名)
+- [ ] `.qwen/skills/danmaku` / `.opencode/skills/danmaku` の symlink が依然有効か確認
+- [ ] opencode + ローカル LLM で 3 ターンループ再動作確認 (Phase 5 と同条件)
+- [ ] 動作の揺れがあれば Phase 5 の「持ち越し」項目に追記
+
+---
+
+## Phase 11: `danmaku-gui-macos` レーンレイアウト追従 ⏳
+
+**想定ブランチ名:** `refactor/macos-lane-layout`
+
+**ゴール:** Phase 7 で Linux 側に入れた「内側マージン削除 + フォントサイズをレーン高から相対決定 + テキストをレーン中央に配置」を macOS 側にも適用する。
+
+**背景:** Phase 8 で Linux 版のパラメータ (`max_lines=8` / 絶対 font size 等) をそのまま移植したため、macOS 側にも同じ上下非対称・絶対値依存の問題がある。Linux と macOS は開発機が異なるためフェーズを分ける (Phase 7 と Phase 9 の分離方針と同じ)。
+
+- [ ] レーン y 計算を Linux 版と同等の「ウィンドウ高等分 + テキスト中央配置」に変更
+- [ ] フォントサイズを `lane_h * k` で動的決定 (Phase 7 で詰めた係数を流用)
+- [ ] 実機で目視確認 (上下対称であること)
 
 ---
 

@@ -19,11 +19,12 @@ use serde::Deserialize;
 const APP_ID: &str = "io.github.danmaku.gui";
 
 // 暫定値 (設定ファイル導入は Phase 3)。
-const DEFAULT_MAX_LINES: usize = 8;
+const DEFAULT_MAX_LINES: usize = 16;
 const DEFAULT_BASE_SPEED: f64 = 250.0; // px/sec
 const SPEED_JITTER: f64 = 0.3; // ±30%
 const SPAWN_GAP_SEC: f64 = 1.5; // 同レーンに新弾を出してよい最小間隔
 const PAYLOAD_STAGGER_MS: u64 = 250; // 同一受信内メッセージの最大ずらし
+const FONT_LANE_RATIO: f64 = 0.6; // フォント絶対高 / レーン高
 
 #[derive(Parser, Debug)]
 #[command(name = "danmaku-gui-linux", about = "Danmaku overlay GUI (Linux/X11)")]
@@ -179,6 +180,9 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
     let h_f = h as f64;
     let max_lines = state.max_lines;
 
+    let lane_h = h_f / max_lines as f64;
+    let font_px = lane_h * FONT_LANE_RATIO;
+
     for bullet in &state.bullets {
         if bullet.start_time > now {
             continue;
@@ -186,12 +190,15 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
         let elapsed = now.duration_since(bullet.start_time).as_secs_f64();
 
         let layout = area.create_pango_layout(Some(&bullet.text));
-        let mut font = pango::FontDescription::from_string("Sans Bold 36");
-        font.set_absolute_size(36.0 * pango::SCALE as f64);
+        let mut font = pango::FontDescription::from_string("Sans Bold");
+        font.set_absolute_size(font_px * pango::SCALE as f64);
         layout.set_font_description(Some(&font));
 
+        let (ink, _logical) = layout.pixel_extents();
+        let lane_center = lane_y(bullet.lane, h_f, max_lines) + lane_h / 2.0;
         let x = w_f - elapsed * bullet.speed;
-        let y = lane_y(bullet.lane, h_f, max_lines);
+        // show_layout の y はレイアウト原点。ink rect の中心が lane_center に来るよう逆算。
+        let y = lane_center - ink.y() as f64 - ink.height() as f64 / 2.0;
 
         cr.move_to(x, y);
         pangocairo::functions::layout_path(cr, &layout);
@@ -206,11 +213,7 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
 }
 
 fn lane_y(lane: usize, h: f64, max_lines: usize) -> f64 {
-    // 上下に少しマージンを取り、レーンを均等配置 (テキスト top 基準)。
-    let top = h * 0.08;
-    let bottom = h * 0.08;
-    let usable = h - top - bottom;
-    top + (lane as f64) * (usable / max_lines as f64)
+    (lane as f64) * (h / max_lines as f64)
 }
 
 fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
