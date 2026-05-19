@@ -56,7 +56,6 @@ enum Command {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Payload {
-    screen: u32,
     messages: Vec<String>,
 }
 
@@ -91,7 +90,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve { screen: 0 }) {
         Command::Serve { screen } => run_serve(screen),
-        Command::Send { screen, messages } => run_send(Payload { screen, messages }),
+        Command::Send { screen, messages } => run_send(screen, Payload { messages }),
     }
 }
 
@@ -103,8 +102,7 @@ fn run_serve(screen: u32) -> ExitCode {
     ExitCode::from(u8::from(code))
 }
 
-fn run_send(payload: Payload) -> ExitCode {
-    let screen = payload.screen;
+fn run_send(screen: u32, payload: Payload) -> ExitCode {
     let count = payload.messages.len();
     let mut line = match serde_json::to_string(&payload) {
         Ok(s) => s,
@@ -115,7 +113,7 @@ fn run_send(payload: Payload) -> ExitCode {
     };
     line.push('\n');
 
-    let path = match socket_path() {
+    let path = match socket_path(screen) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("danmaku: {e}");
@@ -125,9 +123,9 @@ fn run_send(payload: Payload) -> ExitCode {
     let mut stream = match UnixStream::connect(&path) {
         Ok(s) => s,
         Err(e) => {
+            eprintln!("danmaku: failed to connect to {}: {e}", path.display());
             eprintln!(
-                "danmaku: failed to connect to {}: {e}",
-                path.display()
+                "danmaku: hint: is `danmaku serve --screen {screen}` running?"
             );
             return ExitCode::FAILURE;
         }
@@ -309,10 +307,10 @@ fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
     }
 }
 
-fn socket_path() -> Result<PathBuf, String> {
+fn socket_path(screen: u32) -> Result<PathBuf, String> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_string())?;
-    Ok(PathBuf::from(dir).join("danmaku.sock"))
+    Ok(PathBuf::from(dir).join(format!("danmaku-{screen}.sock")))
 }
 
 fn ensure_socket_available(path: &Path) -> Result<(), String> {
@@ -334,7 +332,8 @@ fn ensure_socket_available(path: &Path) -> Result<(), String> {
 }
 
 fn start_socket_listener(state: Rc<RefCell<DanmakuState>>) -> Result<PathBuf, String> {
-    let path = socket_path()?;
+    let screen = state.borrow().screen;
+    let path = socket_path(screen)?;
     ensure_socket_available(&path)?;
 
     let listener = gio::SocketListener::new();
@@ -396,13 +395,6 @@ fn process_line(line: &str, state: &Rc<RefCell<DanmakuState>>) {
         }
     };
     let mut st = state.borrow_mut();
-    if payload.screen != st.screen {
-        eprintln!(
-            "danmaku: screen mismatch (got {}, expected {}); dropping",
-            payload.screen, st.screen
-        );
-        return;
-    }
     spawn_messages(&mut st, &payload.messages);
 }
 
