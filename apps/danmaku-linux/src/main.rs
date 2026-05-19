@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 const APP_ID: &str = "io.github.danmaku.gui";
 
 // 暫定値 (設定ファイル導入は Phase 3)。
-const DEFAULT_MAX_LINES: usize = 16;
+const DEFAULT_LANES: usize = 16;
 const DEFAULT_BASE_SPEED: f64 = 250.0; // px/sec
 const SPEED_JITTER: f64 = 0.3; // ±30%
 const SPAWN_GAP_SEC: f64 = 1.5; // 同レーンに新弾を出してよい最小間隔
@@ -42,6 +42,9 @@ enum Command {
         /// Display index (from `gdk::Display::monitors()`).
         #[arg(long, default_value_t = 0)]
         screen: u32,
+        /// Number of lanes (rows) the danmaku occupies. Range: 1-128.
+        #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u32).range(1..=128))]
+        lanes: u32,
     },
     /// Send messages to a running serve instance and exit.
     Send {
@@ -68,35 +71,38 @@ struct Bullet {
 
 struct DanmakuState {
     screen: u32,
-    max_lines: usize,
+    lanes: usize,
     base_speed: f64,
     bullets: Vec<Bullet>,
-    last_spawn_at: Vec<Option<Instant>>, // length == max_lines
+    last_spawn_at: Vec<Option<Instant>>, // length == lanes
 }
 
 impl DanmakuState {
-    fn new(screen: u32) -> Self {
+    fn new(screen: u32, lanes: usize) -> Self {
         Self {
             screen,
-            max_lines: DEFAULT_MAX_LINES,
+            lanes,
             base_speed: DEFAULT_BASE_SPEED,
             bullets: Vec::new(),
-            last_spawn_at: vec![None; DEFAULT_MAX_LINES],
+            last_spawn_at: vec![None; lanes],
         }
     }
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve { screen: 0 }) {
-        Command::Serve { screen } => run_serve(screen),
+    match cli.command.unwrap_or(Command::Serve {
+        screen: 0,
+        lanes: DEFAULT_LANES as u32,
+    }) {
+        Command::Serve { screen, lanes } => run_serve(screen, lanes as usize),
         Command::Send { screen, messages } => run_send(screen, Payload { messages }),
     }
 }
 
-fn run_serve(screen: u32) -> ExitCode {
+fn run_serve(screen: u32, lanes: usize) -> ExitCode {
     let app = Application::builder().application_id(APP_ID).build();
-    app.connect_activate(move |app| build_ui(app, screen));
+    app.connect_activate(move |app| build_ui(app, screen, lanes));
     // GTK に引数を解釈させない（clap で消費済み）
     let code = app.run_with_args::<&str>(&[]);
     ExitCode::from(u8::from(code))
@@ -138,7 +144,7 @@ fn run_send(screen: u32, payload: Payload) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn build_ui(app: &Application, screen: u32) {
+fn build_ui(app: &Application, screen: u32, lanes: usize) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("danmaku")
@@ -157,7 +163,7 @@ fn build_ui(app: &Application, screen: u32) {
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    let state = Rc::new(RefCell::new(DanmakuState::new(screen)));
+    let state = Rc::new(RefCell::new(DanmakuState::new(screen, lanes)));
 
     let drawing = gtk4::DrawingArea::new();
     drawing.set_hexpand(true);
@@ -235,9 +241,9 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
     let now = Instant::now();
     let w_f = w as f64;
     let h_f = h as f64;
-    let max_lines = state.max_lines;
+    let lanes = state.lanes;
 
-    let lane_h = h_f / max_lines as f64;
+    let lane_h = h_f / lanes as f64;
     let font_px = lane_h * FONT_LANE_RATIO;
 
     for bullet in &state.bullets {
@@ -252,7 +258,7 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
         layout.set_font_description(Some(&font));
 
         let (ink, _logical) = layout.pixel_extents();
-        let lane_center = lane_y(bullet.lane, h_f, max_lines) + lane_h / 2.0;
+        let lane_center = lane_y(bullet.lane, h_f, lanes) + lane_h / 2.0;
         let x = w_f - elapsed * bullet.speed;
         // show_layout の y はレイアウト原点。ink rect の中心が lane_center に来るよう逆算。
         let y = lane_center - ink.y() as f64 - ink.height() as f64 / 2.0;
@@ -269,15 +275,15 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
     }
 }
 
-fn lane_y(lane: usize, h: f64, max_lines: usize) -> f64 {
-    (lane as f64) * (h / max_lines as f64)
+fn lane_y(lane: usize, h: f64, lanes: usize) -> f64 {
+    (lane as f64) * (h / lanes as f64)
 }
 
 fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
     let mut rng = rand::rng();
     let now = Instant::now();
     for msg in messages {
-        let free: Vec<usize> = (0..state.max_lines)
+        let free: Vec<usize> = (0..state.lanes)
             .filter(|&i| {
                 state.last_spawn_at[i]
                     .map(|t| now.duration_since(t).as_secs_f64() >= SPAWN_GAP_SEC)
@@ -287,7 +293,7 @@ fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
         let lane = if let Some(&l) = free.iter().choose(&mut rng) {
             l
         } else {
-            let l = rng.random_range(0..state.max_lines);
+            let l = rng.random_range(0..state.lanes);
             eprintln!(
                 "danmaku: no free lane; overlapping on lane {l}: {msg:?}"
             );
