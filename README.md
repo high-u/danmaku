@@ -12,6 +12,29 @@ cargo run --release --manifest-path apps/danmaku-linux/Cargo.toml
 
 再ビルドのたびに止めて起動し直すのが面倒なので、`cargo install` ではなく `cargo run` で回すのが楽。
 
+### マルチスクリーン
+
+1 プロセス = 1 画面なので、複数モニタに同時に出したいときは画面ごとに serve を起動する。socket は `$XDG_RUNTIME_DIR/danmaku-{screen}.sock` で分離されている。
+
+```
+danmaku serve --screen 0 &
+danmaku serve --screen 1 &
+```
+
+送信側は `--screen N` で送り先を指定する。省略時は `--screen 0`。
+
+```
+danmaku send --screen 1 "右モニタに出す"
+```
+
+### レーン数を変える
+
+弾の本数 (行数) は `--lanes N` で指定する (デフォルト 16、範囲 1-128)。
+
+```
+danmaku serve --lanes 32
+```
+
 ## コマンドをインストールする
 
 `getscreens` と `danmaku` は、スキルやシェルから `which` で見つかる必要があるので `~/.cargo/bin` に入れる。

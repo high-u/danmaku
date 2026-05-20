@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 const APP_ID: &str = "io.github.danmaku.gui";
 
 // 暫定値 (設定ファイル導入は Phase 3)。
-const DEFAULT_MAX_LINES: usize = 16;
+const DEFAULT_LANES: usize = 16;
 const DEFAULT_BASE_SPEED: f64 = 250.0; // px/sec
 const SPEED_JITTER: f64 = 0.3; // ±30%
 const SPAWN_GAP_SEC: f64 = 1.5; // 同レーンに新弾を出してよい最小間隔
@@ -29,7 +29,7 @@ const PAYLOAD_STAGGER_MS: u64 = 250; // 同一受信内メッセージの最大�
 const FONT_LANE_RATIO: f64 = 0.6; // フォント絶対高 / レーン高
 
 #[derive(Parser, Debug)]
-#[command(name = "danmaku", about = "Danmaku overlay GUI (Linux/X11, serve / send 統合)")]
+#[command(name = "danmaku", about = "Transparent danmaku overlay for Linux/X11.")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -37,27 +37,21 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// 常駐モード (引数なしと同義)。透過オーバーレイを表示し socket で送信を待つ。
+    /// Run the overlay (default when no subcommand is given).
     Serve {
-        /// 表示先ディスプレイ番号（gdk::Display::monitors() のインデックス）
+        /// Display index (from `gdk::Display::monitors()`).
         #[arg(long, default_value_t = 0)]
         screen: u32,
+        /// Number of lanes (rows) the danmaku occupies. Range: 1-128.
+        #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u32).range(1..=128))]
+        lanes: u32,
     },
-    /// 常駐インスタンスに JSON ペイロードを送信して即終了。
+    /// Send messages to a running serve instance and exit.
     Send {
-        /// 表示先ディスプレイ番号
+        /// Target display index.
         #[arg(long, default_value_t = 0)]
         screen: u32,
-        /// 文字色 (常駐側の設定を上書き)
-        #[arg(long)]
-        color: Option<String>,
-        /// 速度倍率 (常駐側の設定を上書き)
-        #[arg(long)]
-        speed: Option<f64>,
-        /// フォントサイズ (常駐側の設定を上書き)
-        #[arg(long)]
-        size: Option<u32>,
-        /// 表示する文字列 (1 個以上)
+        /// Messages to display (one or more).
         #[arg(required = true)]
         messages: Vec<String>,
     },
@@ -65,17 +59,7 @@ enum Command {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Payload {
-    screen: u32,
     messages: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)]
-    color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)]
-    speed: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[allow(dead_code)]
-    size: Option<u32>,
 }
 
 struct Bullet {
@@ -87,54 +71,44 @@ struct Bullet {
 
 struct DanmakuState {
     screen: u32,
-    max_lines: usize,
+    lanes: usize,
     base_speed: f64,
     bullets: Vec<Bullet>,
-    last_spawn_at: Vec<Option<Instant>>, // length == max_lines
+    last_spawn_at: Vec<Option<Instant>>, // length == lanes
 }
 
 impl DanmakuState {
-    fn new(screen: u32) -> Self {
+    fn new(screen: u32, lanes: usize) -> Self {
         Self {
             screen,
-            max_lines: DEFAULT_MAX_LINES,
+            lanes,
             base_speed: DEFAULT_BASE_SPEED,
             bullets: Vec::new(),
-            last_spawn_at: vec![None; DEFAULT_MAX_LINES],
+            last_spawn_at: vec![None; lanes],
         }
     }
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve { screen: 0 }) {
-        Command::Serve { screen } => run_serve(screen),
-        Command::Send {
-            screen,
-            color,
-            speed,
-            size,
-            messages,
-        } => run_send(Payload {
-            screen,
-            messages,
-            color,
-            speed,
-            size,
-        }),
+    match cli.command.unwrap_or(Command::Serve {
+        screen: 0,
+        lanes: DEFAULT_LANES as u32,
+    }) {
+        Command::Serve { screen, lanes } => run_serve(screen, lanes as usize),
+        Command::Send { screen, messages } => run_send(screen, Payload { messages }),
     }
 }
 
-fn run_serve(screen: u32) -> ExitCode {
+fn run_serve(screen: u32, lanes: usize) -> ExitCode {
     let app = Application::builder().application_id(APP_ID).build();
-    app.connect_activate(move |app| build_ui(app, screen));
+    app.connect_activate(move |app| build_ui(app, screen, lanes));
     // GTK に引数を解釈させない（clap で消費済み）
     let code = app.run_with_args::<&str>(&[]);
     ExitCode::from(u8::from(code))
 }
 
-fn run_send(payload: Payload) -> ExitCode {
-    let screen = payload.screen;
+fn run_send(screen: u32, payload: Payload) -> ExitCode {
     let count = payload.messages.len();
     let mut line = match serde_json::to_string(&payload) {
         Ok(s) => s,
@@ -145,7 +119,7 @@ fn run_send(payload: Payload) -> ExitCode {
     };
     line.push('\n');
 
-    let path = match socket_path() {
+    let path = match socket_path(screen) {
         Ok(p) => p,
         Err(e) => {
             eprintln!("danmaku: {e}");
@@ -155,9 +129,9 @@ fn run_send(payload: Payload) -> ExitCode {
     let mut stream = match UnixStream::connect(&path) {
         Ok(s) => s,
         Err(e) => {
+            eprintln!("danmaku: failed to connect to {}: {e}", path.display());
             eprintln!(
-                "danmaku: failed to connect to {}: {e}",
-                path.display()
+                "danmaku: hint: is `danmaku serve --screen {screen}` running?"
             );
             return ExitCode::FAILURE;
         }
@@ -170,7 +144,7 @@ fn run_send(payload: Payload) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn build_ui(app: &Application, screen: u32) {
+fn build_ui(app: &Application, screen: u32, lanes: usize) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("danmaku")
@@ -189,7 +163,7 @@ fn build_ui(app: &Application, screen: u32) {
         gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    let state = Rc::new(RefCell::new(DanmakuState::new(screen)));
+    let state = Rc::new(RefCell::new(DanmakuState::new(screen, lanes)));
 
     let drawing = gtk4::DrawingArea::new();
     drawing.set_hexpand(true);
@@ -267,9 +241,9 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
     let now = Instant::now();
     let w_f = w as f64;
     let h_f = h as f64;
-    let max_lines = state.max_lines;
+    let lanes = state.lanes;
 
-    let lane_h = h_f / max_lines as f64;
+    let lane_h = h_f / lanes as f64;
     let font_px = lane_h * FONT_LANE_RATIO;
 
     for bullet in &state.bullets {
@@ -284,7 +258,7 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
         layout.set_font_description(Some(&font));
 
         let (ink, _logical) = layout.pixel_extents();
-        let lane_center = lane_y(bullet.lane, h_f, max_lines) + lane_h / 2.0;
+        let lane_center = lane_y(bullet.lane, h_f, lanes) + lane_h / 2.0;
         let x = w_f - elapsed * bullet.speed;
         // show_layout の y はレイアウト原点。ink rect の中心が lane_center に来るよう逆算。
         let y = lane_center - ink.y() as f64 - ink.height() as f64 / 2.0;
@@ -301,15 +275,15 @@ fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Cont
     }
 }
 
-fn lane_y(lane: usize, h: f64, max_lines: usize) -> f64 {
-    (lane as f64) * (h / max_lines as f64)
+fn lane_y(lane: usize, h: f64, lanes: usize) -> f64 {
+    (lane as f64) * (h / lanes as f64)
 }
 
 fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
     let mut rng = rand::rng();
     let now = Instant::now();
     for msg in messages {
-        let free: Vec<usize> = (0..state.max_lines)
+        let free: Vec<usize> = (0..state.lanes)
             .filter(|&i| {
                 state.last_spawn_at[i]
                     .map(|t| now.duration_since(t).as_secs_f64() >= SPAWN_GAP_SEC)
@@ -319,7 +293,7 @@ fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
         let lane = if let Some(&l) = free.iter().choose(&mut rng) {
             l
         } else {
-            let l = rng.random_range(0..state.max_lines);
+            let l = rng.random_range(0..state.lanes);
             eprintln!(
                 "danmaku: no free lane; overlapping on lane {l}: {msg:?}"
             );
@@ -339,10 +313,10 @@ fn spawn_messages(state: &mut DanmakuState, messages: &[String]) {
     }
 }
 
-fn socket_path() -> Result<PathBuf, String> {
+fn socket_path(screen: u32) -> Result<PathBuf, String> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .ok_or_else(|| "XDG_RUNTIME_DIR is not set".to_string())?;
-    Ok(PathBuf::from(dir).join("danmaku.sock"))
+    Ok(PathBuf::from(dir).join(format!("danmaku-{screen}.sock")))
 }
 
 fn ensure_socket_available(path: &Path) -> Result<(), String> {
@@ -364,7 +338,8 @@ fn ensure_socket_available(path: &Path) -> Result<(), String> {
 }
 
 fn start_socket_listener(state: Rc<RefCell<DanmakuState>>) -> Result<PathBuf, String> {
-    let path = socket_path()?;
+    let screen = state.borrow().screen;
+    let path = socket_path(screen)?;
     ensure_socket_available(&path)?;
 
     let listener = gio::SocketListener::new();
@@ -426,13 +401,6 @@ fn process_line(line: &str, state: &Rc<RefCell<DanmakuState>>) {
         }
     };
     let mut st = state.borrow_mut();
-    if payload.screen != st.screen {
-        eprintln!(
-            "danmaku: screen mismatch (got {}, expected {}); dropping",
-            payload.screen, st.screen
-        );
-        return;
-    }
     spawn_messages(&mut st, &payload.messages);
 }
 
