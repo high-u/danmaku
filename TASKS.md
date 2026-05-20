@@ -10,16 +10,19 @@
 |---|---|---|
 | 1 | `danmaku-gui-linux` 最小プロト (X11 透過オーバーレイ実証) | ✅ 完了 |
 | 2 | `danmaku-cli` + socket 通信 + 複数行ランダム配置 | ✅ 完了 |
-| 3 | 設定ファイル (`~/.config/danmaku/config.toml`) 読み込み | ⏳ 未着手 |
+| 3 | 設定ファイル (`~/.config/danmaku/config.toml`) 読み込み | 🟦 保留 (当面不要、Phase 12 で実用上必要なものは引数化済み) |
 | 4 | `getscreens` (Rust + maim ハイブリッド、JSON 配列出力) | ✅ 完了 |
 | 5 | `skills/danmaku/SKILL.md` (Agent Skills 仕様準拠 / ループ指示) + 開発者向け README | 🔄 動作確認まで完了・検証残 |
-| 6 | トレイアイコン | ⏳ 未着手 |
+| 6 | トレイアイコン | 🔁 Phase 13 に統合 |
 | 7 | `danmaku-gui-linux` レーンレイアウト修正 + `danmaku-cli` を `danmaku-gui send` に統合 | ✅ 完了 |
 | 8 | `danmaku-gui-macos` (Rust + objc2, macOS 実機、`serve` / `send` 統合形) | ✅ 完了 |
 | 9 | `danmaku-gui-macos` マルチスクリーン対応 (`--screen N` の serve 側) | ⏳ 未着手 |
 | 10 | `danmaku-cli` 削除 + `danmaku-linux` リネーム + バイナリ名 `danmaku` 統一 (Linux 側) + ドキュメント追従 | ✅ 完了 |
 | 11 | `danmaku-gui-macos` レーンレイアウト追従 (Phase 7 と同等) | ⏳ 未着手 |
-| 12 | `danmaku-linux` help 英語化 + N プロセス・マルチスクリーン + `--lanes` + `max_lines`→`lanes` 改名 | ⏳ 未着手 |
+| 12 | `danmaku-linux` help 英語化 + N プロセス・マルチスクリーン + `--lanes` + `max_lines`→`lanes` 改名 | ✅ 完了 |
+| 13 | `danmaku-linux` トレイアイコン + `--debug` 背景表示オプション (デフォルト透明) | ⏳ 未着手 |
+
+**Linux 側の状態**: Phase 12 までで CLI 表面・マルチスクリーン・レーン数指定が実用形に揃った。残るのは Phase 13 (トレイアイコン + `--debug`)。これが入れば Linux 側の機能開発は一旦完了の想定。
 
 ---
 
@@ -65,16 +68,19 @@
 
 ---
 
-## Phase 3: 設定ファイル読み込み ⏳
+## Phase 3: 設定ファイル読み込み 🟦 保留
 
 **想定ブランチ名:** `app/config`
 
-**ゴール:** `~/.config/danmaku/config.toml` で見た目・速度・行数上限などを変更できる。
+**当面不要と判断した理由 (Phase 12 完了時点):**
 
-- [ ] TOML スキーマ（`[display]` セクション: `font_size` / `font_family` / `color` / `opacity` / `speed` / `max_lines`、`[socket]` セクション: `path`）
-- [ ] `danmaku-gui-linux` 起動時に読み込み（無ければデフォルト）
-- [ ] CLI フラグ (`--color`, `--speed`, `--size`) で上書きできるようにする
-- [ ] 設定変更時の挙動: 再起動で反映（ホットリロードは不要）
+- フォントサイズはレーン高から相対決定 (`lane_h * 0.6`、Phase 7) → `--lanes` で間接的に決まる
+- 速度は `base_speed` + `SPEED_JITTER=0.3` でランダム化されており「固定値で指定する」要件が薄い
+- 色は白塗り + 黒縁取り固定で運用上不満が出ていない
+- レーン数 (`--lanes`) と画面 (`--screen`) は Phase 12 で引数化済み
+- 「ユーザーが起動時に決めたいパラメータ」はすべて CLI 引数で出ているため、設定ファイル層を入れる動機がない
+
+必要性が出てから (例: 利用者ごとに恒久的なデフォルト値を持ちたい、複数プロファイル切り替えたい、等) フェーズを切り直す。当面は本セクションを参照情報として残すのみ。
 
 ---
 
@@ -148,15 +154,9 @@
 
 ---
 
-## Phase 6: トレイアイコン ⏳
+## Phase 6: トレイアイコン 🔁 Phase 13 に統合
 
-**想定ブランチ名:** `feature/tray`
-
-**ゴール:** ユーザが `danmaku-gui-linux` の起動を視覚的に認識でき、停止操作ができる。
-
-- [ ] `ksni` クレートで AppIndicator
-- [ ] メニュー項目（要件確定）: 例 `表示 ON/OFF`、`終了`
-- [ ] アイコン素材
+Phase 12 完了時点で Linux 側の残作業を 1 フェーズにまとめるため、トレイアイコンは Phase 13 (`--debug` 背景表示オプションと併せて) に統合した。詳細は Phase 13 を参照。
 
 ---
 
@@ -310,7 +310,7 @@
 
 ---
 
-## Phase 12: `danmaku-linux` help 英語化 + N プロセス・マルチスクリーン + `--lanes` + 改名 ⏳
+## Phase 12: `danmaku-linux` help 英語化 + N プロセス・マルチスクリーン + `--lanes` + 改名 ✅
 
 **想定ブランチ名:** `feature/linux-multiscreen-lanes-help`
 
@@ -334,25 +334,25 @@
 
 **実装タスク:**
 
-- [ ] **help 英語化**: `Cli::about` と各サブコマンドの doc コメントを英語に統一
-- [ ] **Send の `--color` / `--speed` / `--size` 削除**: `Command::Send` のフィールド、`Payload` の `color` / `speed` / `size` フィールド、`run_send` の構築箇所、`#[allow(dead_code)]` 抑制も同時に削除
-- [ ] **N プロセス・マルチスクリーン**:
+- [x] **help 英語化**: `Cli::about` と各サブコマンドの doc コメントを英語に統一
+- [x] **Send の `--color` / `--speed` / `--size` 削除**: `Command::Send` のフィールド、`Payload` の `color` / `speed` / `size` フィールド、`run_send` の構築箇所、`#[allow(dead_code)]` 抑制も同時に削除
+- [x] **N プロセス・マルチスクリーン**:
   - `socket_path()` を `socket_path(screen: u32) -> Result<PathBuf, String>` に変更し `danmaku-{screen}.sock` を返す
   - `run_serve` で起動時 screen から socket パス決定
   - `run_send` で `--screen N` から同じパスを計算して `connect()`
   - `Payload` から `screen` フィールド削除 → `{ messages: [...] }` のみ
   - `process_line` の screen 不一致 drop ロジック削除 (ルーティングは socket パスで完結)
-- [ ] **`--lanes` (serve のみ)**:
+- [x] **`--lanes` (serve のみ)**:
   - `clap` の `value_parser!(usize).range(1..=128)` で範囲制御 (0 と 129 以上はエラー)
   - デフォルト 16 (現状の `DEFAULT_MAX_LINES` 同値)
   - `DanmakuState::new` に lanes 引数を追加して `lanes` フィールドに反映
-- [ ] **`max_lines` → `lanes` 改名**: `DEFAULT_MAX_LINES` → `DEFAULT_LANES`、`DanmakuState::max_lines` → `lanes`、`draw_bullets` / `spawn_messages` / `lane_y` の参照を一括更新
-- [ ] **send エラー文言** (英語 + ヒント): `danmaku: failed to connect to <path>: <e>` に続けて `hint: is 'danmaku serve --screen <N>' running?` を出す
-- [ ] `cargo build --release` でビルド成功確認
-- [ ] `danmaku --help` / `danmaku serve --help` / `danmaku send --help` の出力目視
-- [ ] `danmaku serve --lanes 0` / `--lanes 129` で範囲外エラー確認
-- [ ] 実機で `--screen 0` / `--screen 1` 並列起動して `send --screen 0` / `--screen 1` の振り分け目視 (マルチモニタ実機がある場合)
-- [ ] 未起動 screen への send で `hint:` 付きエラー文言確認
+- [x] **`max_lines` → `lanes` 改名**: `DEFAULT_MAX_LINES` → `DEFAULT_LANES`、`DanmakuState::max_lines` → `lanes`、`draw_bullets` / `spawn_messages` / `lane_y` の参照を一括更新
+- [x] **send エラー文言** (英語 + ヒント): `danmaku: failed to connect to <path>: <e>` に続けて `hint: is 'danmaku serve --screen <N>' running?` を出す
+- [x] `cargo build --release` でビルド成功確認
+- [x] `danmaku --help` / `danmaku serve --help` / `danmaku send --help` の出力目視
+- [x] `danmaku serve --lanes 0` / `--lanes 129` で範囲外エラー確認
+- [x] 実機で `--screen 0` / `--screen 1` 並列起動して `send --screen 0` / `--screen 1` の振り分け目視
+- [x] 未起動 screen への send で `hint:` 付きエラー文言確認
 
 **スコープ外 (今フェーズで触らない):**
 
@@ -361,6 +361,54 @@
 - `--color` / `--speed` / `--size` の再導入 — 必要性が出てから serve 側既定値 + 設定ファイルとして再設計
 
 **コミット粒度:** ① help 英語化 + Send dead flag 削除、② socket パス screen 化 + Payload screen 削除、③ `--lanes` 導入 + `max_lines`→`lanes` 改名 の 3 コミットを想定。
+
+**実施結果 (PR #10):** 上記 3 コミットに README 追従と TASKS.md 追記を加えて全 5 コミット。実機で透過オーバーレイ目視・マルチスクリーン振り分け・`--lanes` 密度差すべて確認済み。
+
+**本フェーズで確定した方針 (Phase 13 以降に持ち越さない決定):**
+
+- 設定ファイル (`~/.config/danmaku/config.toml`) は当面導入しない (Phase 3 参照)
+- Send 側の `--color` / `--speed` / `--size` は再導入しない (削除時点でユースケースなし、必要が出てから serve 側既定値 + 設定ファイル経路で再設計)
+- 1 serve = 1 画面 = 1 socket = `danmaku-{screen}.sock` を恒久ルートとする (中央レジストリは持たない)
+- レーン数の用語は `lanes` で統一 (`max_lines` / `lines` 系の識別子は再導入しない)
+
+---
+
+## Phase 13: `danmaku-linux` トレイアイコン + `--debug` 背景表示オプション ⏳
+
+**想定ブランチ名:** `feature/linux-tray-and-debug-bg`
+
+**ゴール:** Linux 側 (`apps/danmaku-linux`) の機能開発を一旦完了させる。
+
+1. トレイアイコンで常駐を視覚的に確認でき、停止操作ができる
+2. `--debug` フラグで初めて動作確認用の薄い背景色が表示されるようにし、デフォルトでは完全透明にする (現状は `main.rs:159` で薄青背景を常時表示しているが、これは開発中の領域可視化用で本来不要)
+
+**背景:**
+
+- Phase 1 以来、デバッグのため `rgba(100, 160, 220, 0.08)` の薄青背景を常時敷いていた (`apps/danmaku-linux/src/main.rs:155-159`)。実用形では透明に戻すべきだが、開発中はウィンドウ位置確認に便利なため、フラグで切り替え可能にする
+- トレイアイコンは Phase 6 として未着手のまま残っていた。本フェーズで併せて実装
+- macOS 側にも対称の `BACKGROUND_TINT` (`apps/danmaku-gui-macos/src/main.rs:37`) があるが、本フェーズの対象外 (macOS は別タスクで追従)
+
+**実装タスク:**
+
+- [ ] **`--debug` オプション** (`serve` サブコマンド)
+  - `clap` でフラグ追加 (デフォルト `false`)
+  - `build_ui` に `debug: bool` を渡し、`true` のときだけ `rgba(100, 160, 220, 0.08)` 背景を、`false` では `transparent` を CSS に流し込む
+  - `cargo run -- serve` (透明) / `cargo run -- serve --debug` (薄青) の両方を実機で目視
+- [ ] **トレイアイコン** (`ksni` クレート)
+  - `cargo add ksni` (最新安定版)
+  - アイコン素材を `apps/danmaku-linux/assets/icon.svg` (または PNG 22/32/48px) として配置し `include_bytes!` で埋め込む
+  - メニュー項目: `Quit` (最小構成)。表示 ON/OFF は後追い
+  - `serve` 起動時にトレイスレッドを spawn し、`Quit` 選択でメインループに終了シグナルを送る
+  - 実機 (GNOME / KDE / 一般的なタスクバー) でアイコン表示と Quit 動作を目視
+- [ ] **アイコン素材決定**: SVG 1 ファイル、正方形、背景透過、モノクロ + アクセント 1 色程度。デザイン案は別途相談
+- [ ] `cargo build --release` でビルド成功確認
+- [ ] `danmaku serve --help` で `--debug` が見えること
+
+**スコープ外:**
+
+- macOS 側の `BACKGROUND_TINT` → `None` 化、macOS 側トレイ (Phase 11 / 別フェーズ)
+- メニューに「表示 ON/OFF」などの追加項目 (最小構成で確認後、必要が出てから)
+- 設定ファイル (Phase 3、保留)
 
 ---
 
