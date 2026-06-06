@@ -80,3 +80,39 @@ danmaku send "確認用コメント"
 | `danmaku: serve did not become ready within 5s` | 自動起動した serve が時間内に待受開始しなかった。手動で `danmaku serve` を起動して原因を確認 |
 | `danmaku: monitor #N not found; aborting` | `--screen N` が範囲外。`xrandr --listmonitors` でインデックス確認 |
 | 透過オーバーレイが見えない | ウィンドウマネージャ / コンポジタが X11 か確認 (Wayland セッションは非対応) |
+
+## 5. リリース手順 (ローカルビルド + 手動アップロード)
+
+ビルド済みバイナリを GitHub Releases に上げて配布する。CI は使わず、ローカルでビルドして `gh` で添付する。
+
+前提: 対象コミットが `main` にマージ済みであること。コマンドはリポジトリのルートから実行する。`X.Y.Z` は `apps/danmaku-linux/Cargo.toml` の `version` に合わせる。
+
+```
+# 1. main を最新化
+git checkout main && git pull --ff-only
+
+# 2. タグを打って push
+git tag vX.Y.Z && git push origin vX.Y.Z
+
+# 3. リリースビルド
+cargo build --release --manifest-path apps/danmaku-linux/Cargo.toml
+
+# 4. 配布アセット名にコピー (リネーム)
+cp apps/danmaku-linux/target/release/danmaku /tmp/danmaku-linux-x86_64
+
+# 5. Release を作成してアセットを添付
+gh release create vX.Y.Z /tmp/danmaku-linux-x86_64 --title "vX.Y.Z" --notes "..."
+```
+
+確認:
+
+```
+gh release view vX.Y.Z --json tagName,assets -q '.tagName, .assets[].name'
+```
+
+利用者側のインストール手順は `README.md` を参照。
+
+### 注意
+
+- アセット名は `danmaku-linux-x86_64` 固定。`README.md` の `releases/latest/download/danmaku-linux-x86_64` がこの名前に依存している。変えるなら両方直す。
+- **動作下限はビルドした環境に依存する**。ローカルが Ubuntu 24.04 なら glibc 2.39 / GTK 4.14 環境でのビルドになり、バイナリは glibc 2.39 以降でしか動かない。より古い distro まで対応したい場合は、GTK 4.12 以降を積んだ古め base のコンテナでビルドする (このローカル手順とは別途)。
