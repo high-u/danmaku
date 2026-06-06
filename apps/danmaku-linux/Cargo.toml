@@ -13,7 +13,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 gdk4-x11 = { version = "0.11.0", features = ["v4_10"] }
 gio = "0.22.6"
 glib = "0.22.7"
-gtk4 = { version = "0.11.3", features = ["v4_14"] }
+gtk4 = { version = "0.11.3", features = ["v4_12"] }
 libc = "0.2.186"
 pangocairo = "0.22.0"
 rand = "0.10.1"

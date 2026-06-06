@@ -1,82 +1,61 @@
-# danmaku-linux 開発時の動作確認
+# danmaku (Linux/X11)
 
-X11 上で透過オーバーレイ (serve) と送信 (send) を最短経路で確認する手順。コマンドはリポジトリのルートディレクトリから実行する想定。
+画面に透過オーバーレイを重ね、ニコニコ動画風の弾幕コメントを右から左へ流す常駐アプリ。`danmaku send "コメント"` を叩くだけで画面に弾幕が流れる。
 
-`send` は serve が起動していなければ自動で起動するため、通常は `send` だけ叩けばよい。serve は最後の弾幕から一定時間 (デフォルト 30 分、設定で変更可) でアイドル自動終了する。
+## 前提条件
 
-## 1. 常駐 (serve) を起動
+実行する環境が満たすべき条件:
 
-ターミナル A:
+- **Linux / x86_64**
+- **X11 セッション**（Wayland セッションは非対応）
+- **GTK 4.12 以降**のランタイム（多くのデスクトップ環境に同梱。`cairo` / `pango` / `glib` も GTK に付随）
 
-```
-cargo run --release --manifest-path apps/danmaku-linux/Cargo.toml
-```
+## インストール
 
-引数なしは `serve` と同義。透過オーバーレイが表示され、`danmaku: listening on <socket-path>` が stderr に出れば待受開始。serve だけ単体で起動することもできる (この場合も弾幕が来なければ 30 分でアイドル終了する)。
-
-別ディスプレイに出したい場合:
+[Releases](https://github.com/high-u/danmaku/releases/latest) からビルド済みバイナリを取得して `PATH` の通った場所に置く:
 
 ```
-cargo run --release --manifest-path apps/danmaku-linux/Cargo.toml -- serve --screen 1
+curl -L -o danmaku https://github.com/high-u/danmaku/releases/latest/download/danmaku-linux-x86_64
+chmod +x danmaku
+mkdir -p ~/.local/bin && mv danmaku ~/.local/bin/
 ```
 
-`--screen` は `gdk::Display::monitors()` のインデックス (0 始まり)。
-
-## 2. 送信 (send) で弾幕を流す
-
-ターミナル B:
+`~/.local/bin` が `PATH` に含まれていること。確認:
 
 ```
-cargo run --release --manifest-path apps/danmaku-linux/Cargo.toml -- send "ハロー" "テスト" "弾幕"
+which danmaku
 ```
 
-成功時 stdout に `sent 3 message(s) to screen 0` が出て即終了。serve 側の画面に複数本の弾幕が右→左に流れる。serve が動いていなければ自動起動され、立ち上がり次第そのまま流れる。
-
-`--screen` を付けた serve に送る場合は send 側にも同じ番号を渡す:
+## 実行例
 
 ```
-cargo run --release --manifest-path apps/danmaku-linux/Cargo.toml -- send --screen 1 "..."
+danmaku send "ハロー" "テスト" "弾幕"
 ```
 
-serve 側 screen と不一致なら drop される (stderr に `danmaku: screen mismatch ...`)。
+- 成功すると `sent 3 message(s) to screen 0` が出て即終了し、画面に弾幕が流れる。
+- オーバーレイ本体 (serve) は **未起動なら自動で立ち上がる**。手動起動は不要。
+- serve は最後の弾幕から **30 分**でアイドル自動終了する。
 
-## 3. 常駐検出 / socket 確認
+複数ディスプレイのうち特定の画面に出す場合は `--screen`（`0` 始まり）を付ける:
 
 ```
-pgrep -x danmaku
-ls -l "${XDG_RUNTIME_DIR:?}/danmaku-0.sock"
+danmaku send --screen 1 "別の画面に出す"
 ```
 
-socket は screen ごとに `danmaku-<screen>.sock`。
+画面インデックスは `xrandr --listmonitors` で確認できる。
 
-## 設定ファイル
+## 設定（任意）
 
-`~/.config/danmaku/config.toml` (無ければ全項目デフォルト)。正常に読めた場合のみ採用し、壊れていれば黙ってデフォルトにフォールバックする。未知のキーは無視、欠けたキーは個別にデフォルト値で補う。
+挙動は `~/.config/danmaku/config.toml` で変更できる（無ければすべてデフォルト）。
 
 ```toml
-lanes = 16              # レーン数 (1-128 にクランプ)。デフォルト 16
-idle_timeout_min = 30   # 最終弾幕からこの分数でアイドル自動終了。0 で無効。デフォルト 30
-debug_background = false # 領域確認用の薄い背景色を表示 (開発用)。デフォルト false
+lanes = 16              # 弾幕のレーン数 (1-128)。デフォルト 16
+idle_timeout_min = 30   # 最終弾幕からこの分数で自動終了。0 で無効。デフォルト 30
+debug_background = false # 表示領域確認用の薄い背景 (開発用)。デフォルト false
 ```
 
-設定は serve 起動時に読まれる (手動起動でも send による自動起動でも同じ)。意図的に CLI 引数には出していない。
+設定は serve の起動時に読まれる。
 
-## 4. インストール後の確認
+## 開発・動作確認
 
-`cargo install` 経由で `~/.cargo/bin/danmaku` を入れたあとに、シェルから素のコマンド名で叩ける状態を確認する:
-
-```
-cargo install --path apps/danmaku-linux --debug
-which danmaku
-danmaku           # serve (Ctrl-C で停止)
-danmaku send "確認用コメント"
-```
-
-## エラー時の典型パターン
-
-| 症状 | 原因と確認 |
-|---|---|
-| `danmaku: failed to launch serve: ...` | 自動起動に失敗 (実行ファイルが見つからない等)。`which danmaku` を確認 |
-| `danmaku: serve did not become ready within 5s` | 自動起動した serve が時間内に待受開始しなかった。手動で `danmaku serve` を起動して原因を確認 |
-| `danmaku: monitor #N not found; aborting` | `--screen N` が範囲外。`xrandr --listmonitors` でインデックス確認 |
-| 透過オーバーレイが見えない | ウィンドウマネージャ / コンポジタが X11 か確認 (Wayland セッションは非対応) |
+ソースからの実行確認手順は [DEV.md](DEV.md) を参照。
