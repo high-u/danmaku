@@ -10,7 +10,7 @@
 |---|---|---|
 | 1 | `danmaku-gui-linux` 最小プロト (X11 透過オーバーレイ実証) | ✅ 完了 |
 | 2 | `danmaku-cli` + socket 通信 + 複数行ランダム配置 | ✅ 完了 |
-| 3 | 設定ファイル (`~/.config/danmaku/config.toml`) 読み込み | 🟦 保留 (当面不要、Phase 12 で実用上必要なものは引数化済み) |
+| 3 | 設定ファイル (`~/.config/danmaku/config.toml`) 読み込み | ✅ 完了 (Phase 14 で実装: `lanes` / `idle_timeout_min` / `debug_background`) |
 | 4 | `getscreens` (Rust + maim ハイブリッド、JSON 配列出力) | ✅ 完了 |
 | 5 | `skills/danmaku/SKILL.md` (Agent Skills 仕様準拠 / ループ指示) + 開発者向け README | 🔄 動作確認まで完了・検証残 |
 | 6 | トレイアイコン | 🔁 Phase 13 に統合 |
@@ -20,9 +20,10 @@
 | 10 | `danmaku-cli` 削除 + `danmaku-linux` リネーム + バイナリ名 `danmaku` 統一 (Linux 側) + ドキュメント追従 | ✅ 完了 |
 | 11 | `danmaku-gui-macos` レーンレイアウト追従 (Phase 7 と同等) | ⏳ 未着手 |
 | 12 | `danmaku-linux` help 英語化 + N プロセス・マルチスクリーン + `--lanes` + `max_lines`→`lanes` 改名 | ✅ 完了 |
-| 13 | `danmaku-linux` トレイアイコン + `--debug` 背景表示オプション (デフォルト透明) | ⏳ 未着手 |
+| 13 | `danmaku-linux` トレイアイコン (`--debug` は Phase 14 で config 化済み) | ⏳ 未着手 |
+| 14 | `danmaku-linux` `send` による serve 自動起動 + アイドル自動終了 + 設定ファイル化 (lanes/timeout/debug を config へ移行) | ✅ 完了 |
 
-**Linux 側の状態**: Phase 12 までで CLI 表面・マルチスクリーン・レーン数指定が実用形に揃った。残るのは Phase 13 (トレイアイコン + `--debug`)。これが入れば Linux 側の機能開発は一旦完了の想定。
+**Linux 側の状態**: Phase 14 で「serve が起動していなくても `send` で自動起動 → 表示」「最終弾幕からアイドル自動終了」「挙動パラメータの設定ファイル化 (CLI 表面の最小化)」まで揃った。残るのはトレイアイコン (Phase 13) のみ。これが入れば Linux 側の機能開発は一旦完了の想定。
 
 ---
 
@@ -409,6 +410,35 @@ Phase 12 完了時点で Linux 側の残作業を 1 フェーズにまとめる�
 - macOS 側の `BACKGROUND_TINT` → `None` 化、macOS 側トレイ (Phase 11 / 別フェーズ)
 - メニューに「表示 ON/OFF」などの追加項目 (最小構成で確認後、必要が出てから)
 - 設定ファイル (Phase 3、保留)
+
+---
+
+## Phase 14: `danmaku-linux` 自動起動 + アイドル終了 + 設定ファイル化 ✅
+
+**ブランチ:** `feature/linux-autospawn-config`
+
+**ゴール:** 「表示アプリが起動していなければいけない」制約を無くす。送信側 (`send`) が serve の生存を気にしなくてよい状態にする。
+
+**確定した設計判断:**
+
+- **CLI 表面は最小化し、挙動パラメータは設定ファイルへ。** このコマンドはローカル LLM が叩くため、`--help` に出る項目は LLM への選択肢提示そのもの。`--lanes` は撤去し、`--debug` も CLI に出さず config へ。残す CLI 引数は宛先 (`--screen` = socket 識別子) のみ。
+- **自己起動方式 (A):** `send` が connect 失敗時に自分自身を `serve --screen N` として `setsid` で detach 起動し、socket が立つまで最大 5 秒ポーリングして送信。systemd socket activation (B) は配布が unit ファイル前提になるため不採用。
+- **二重起動は先勝ち:** 同時 send で複数 serve が立っても 2 つ目は socket 使用中 (`ensure_socket_available`) で自滅。害なし。
+- **アイドル終了:** 最終弾幕からの経過で判定 (起動時刻を初期値とするので「起動後 N 分無音」も含む)。30 秒間隔の glib タイマーで監視、超過で `app.quit()`。
+- **設定ファイル:** `~/.config/danmaku/config.toml`。正常パース時のみ採用、壊れていれば黙ってデフォルト、未知キーは無視、欠けたキーは個別デフォルト。生成コマンドやエラー表示はしない。
+- **マシン終了:** SIGTERM のデフォルト動作で即終了し、シャットダウンを妨げない。socket は tmpfs (`XDG_RUNTIME_DIR`) 上で再起動時に掃除されるため、明示的シグナルハンドラは置かない (glib 0.22 で `unix_signal_add_local` が無いことも踏まえた判断)。
+
+**実装タスク:**
+
+- [x] `serve --lanes` 撤去、`Config` 構造体 + `load_config()` 追加 (`toml` crate)
+- [x] config キー: `lanes` (1-128 クランプ, default 16) / `idle_timeout_min` (default 30, 0 で無効) / `debug_background` (default false)
+- [x] `debug_background` で背景 CSS を切替 (default 透明 / true で薄青)
+- [x] `send` の connect 失敗時に自己起動 (`spawn_serve` + `setsid`, `libc` crate) + `wait_for_socket` (5s)
+- [x] アイドル自動終了タイマー
+- [x] README 追従 (自動起動・config・エラー表)
+- [x] `cargo build` 成功 / `--help` に lanes・debug が出ないこと確認 / 自動起動・config 堅牢性をスモークテスト
+
+**スコープ外:** トレイアイコン (Phase 13)、macOS 側追従。
 
 ---
 

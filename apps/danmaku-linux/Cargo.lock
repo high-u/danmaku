@@ -185,10 +185,12 @@ dependencies = [
  "gio",
  "glib",
  "gtk4",
+ "libc",
  "pangocairo",
  "rand",
  "serde",
  "serde_json",
+ "toml",
  "x11",
 ]
 
