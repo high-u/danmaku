@@ -1,8 +1,9 @@
 use std::cell::RefCell;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command as ProcCommand, ExitCode, Stdio};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -20,8 +21,11 @@ use serde::{Deserialize, Serialize};
 
 const APP_ID: &str = "io.github.danmaku.gui";
 
-// 暫定値 (設定ファイル導入は Phase 3)。
+// デフォルト値。設定ファイル (~/.config/danmaku/config.toml) があれば上書きされる。
 const DEFAULT_LANES: usize = 16;
+const DEFAULT_IDLE_TIMEOUT_MIN: u64 = 30;
+const MIN_LANES: u32 = 1;
+const MAX_LANES: u32 = 128;
 const DEFAULT_BASE_SPEED: f64 = 250.0; // px/sec
 const SPEED_JITTER: f64 = 0.3; // ±30%
 const SPAWN_GAP_SEC: f64 = 1.5; // 同レーンに新弾を出してよい最小間隔
@@ -42,11 +46,8 @@ enum Command {
         /// Display index (from `gdk::Display::monitors()`).
         #[arg(long, default_value_t = 0)]
         screen: u32,
-        /// Number of lanes (rows) the danmaku occupies. Range: 1-128.
-        #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u32).range(1..=128))]
-        lanes: u32,
     },
-    /// Send messages to a running serve instance and exit.
+    /// Send messages to the overlay (starting it if needed) and exit.
     Send {
         /// Target display index.
         #[arg(long, default_value_t = 0)]
@@ -62,6 +63,47 @@ struct Payload {
     messages: Vec<String>,
 }
 
+// 設定ファイル。正常にパースできた場合のみ採用し、欠けたキーは個別のデフォルト値で
+// 埋める。未知のキーは無視。ファイルが無い/読めない/壊れている場合は全項目デフォルト。
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct Config {
+    /// レーン数 (1-128 にクランプ)。
+    lanes: u32,
+    /// 最終弾幕からこの分数を過ぎたら自動終了。0 で無効 (終了しない)。
+    idle_timeout_min: u64,
+    /// 領域確認用の薄い背景色を表示する (開発用)。
+    debug_background: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            lanes: DEFAULT_LANES as u32,
+            idle_timeout_min: DEFAULT_IDLE_TIMEOUT_MIN,
+            debug_background: false,
+        }
+    }
+}
+
+fn config_path() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(dir).join("danmaku").join("config.toml"));
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".config").join("danmaku").join("config.toml"))
+}
+
+fn load_config() -> Config {
+    let Some(path) = config_path() else {
+        return Config::default();
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Config::default();
+    };
+    toml::from_str::<Config>(&text).unwrap_or_default()
+}
+
 struct Bullet {
     text: String,
     lane: usize,
@@ -75,6 +117,7 @@ struct DanmakuState {
     base_speed: f64,
     bullets: Vec<Bullet>,
     last_spawn_at: Vec<Option<Instant>>, // length == lanes
+    last_activity: Instant,              // 最後に弾幕を受信した時刻 (アイドル終了判定用)
 }
 
 impl DanmakuState {
@@ -85,24 +128,29 @@ impl DanmakuState {
             base_speed: DEFAULT_BASE_SPEED,
             bullets: Vec::new(),
             last_spawn_at: vec![None; lanes],
+            last_activity: Instant::now(),
         }
     }
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve {
-        screen: 0,
-        lanes: DEFAULT_LANES as u32,
-    }) {
-        Command::Serve { screen, lanes } => run_serve(screen, lanes as usize),
+    match cli.command.unwrap_or(Command::Serve { screen: 0 }) {
+        Command::Serve { screen } => run_serve(screen),
         Command::Send { screen, messages } => run_send(screen, Payload { messages }),
     }
 }
 
-fn run_serve(screen: u32, lanes: usize) -> ExitCode {
+fn run_serve(screen: u32) -> ExitCode {
+    let config = load_config();
+    let lanes = config.lanes.clamp(MIN_LANES, MAX_LANES) as usize;
+    let idle_timeout_min = config.idle_timeout_min;
+    let debug_background = config.debug_background;
+
     let app = Application::builder().application_id(APP_ID).build();
-    app.connect_activate(move |app| build_ui(app, screen, lanes));
+    app.connect_activate(move |app| {
+        build_ui(app, screen, lanes, idle_timeout_min, debug_background)
+    });
     // GTK に引数を解釈させない（clap で消費済み）
     let code = app.run_with_args::<&str>(&[]);
     ExitCode::from(u8::from(code))
@@ -126,14 +174,21 @@ fn run_send(screen: u32, payload: Payload) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // serve が居れば即送信。居なければ自動起動して socket が立つのを待つ。
     let mut stream = match UnixStream::connect(&path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("danmaku: failed to connect to {}: {e}", path.display());
-            eprintln!(
-                "danmaku: hint: is `danmaku serve --screen {screen}` running?"
-            );
-            return ExitCode::FAILURE;
+        Err(_) => {
+            if let Err(e) = spawn_serve(screen) {
+                eprintln!("danmaku: failed to launch serve: {e}");
+                return ExitCode::FAILURE;
+            }
+            match wait_for_socket(&path, Duration::from_secs(5)) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("danmaku: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
         }
     };
     if let Err(e) = stream.write_all(line.as_bytes()) {
@@ -144,7 +199,56 @@ fn run_send(screen: u32, payload: Payload) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn build_ui(app: &Application, screen: u32, lanes: usize) {
+// 自分自身を `serve --screen N` として、親から切り離した新セッションで起動する。
+// 二重起動は先勝ち: 2 つ目の serve は socket 使用中で自滅するため害はない。
+fn spawn_serve(screen: u32) -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let mut cmd = ProcCommand::new(exe);
+    cmd.arg("serve")
+        .arg("--screen")
+        .arg(screen.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // setsid で制御端末から切り離し、send 終了後も生き残れるようにする。
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn()?;
+    Ok(())
+}
+
+// serve 起動直後の socket が listen 可能になるまで接続を試行する。
+fn wait_for_socket(path: &Path, timeout: Duration) -> Result<UnixStream, String> {
+    let start = Instant::now();
+    loop {
+        match UnixStream::connect(path) {
+            Ok(s) => return Ok(s),
+            Err(_) => {
+                if start.elapsed() >= timeout {
+                    return Err(format!(
+                        "serve did not become ready within {}s",
+                        timeout.as_secs()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+fn build_ui(
+    app: &Application,
+    screen: u32,
+    lanes: usize,
+    idle_timeout_min: u64,
+    debug_background: bool,
+) {
     let window = ApplicationWindow::builder()
         .application(app)
         .title("danmaku")
@@ -152,11 +256,16 @@ fn build_ui(app: &Application, screen: u32, lanes: usize) {
         .resizable(false)
         .build();
 
-    // 背景を透明に
+    // 背景。通常は完全透明。debug_background のときだけ領域確認用の薄青を敷く。
     let css = gtk4::CssProvider::new();
-    // 確認用: ウィンドウ範囲を可視化するため半透明の薄色を敷く。
-    // 本番では "background: transparent;" に戻す。
-    css.load_from_string("window { background: rgba(100, 160, 220, 0.08); } window > * { background: transparent; }");
+    let window_bg = if debug_background {
+        "rgba(100, 160, 220, 0.08)"
+    } else {
+        "transparent"
+    };
+    css.load_from_string(&format!(
+        "window {{ background: {window_bg}; }} window > * {{ background: transparent; }}"
+    ));
     gtk4::style_context_add_provider_for_display(
         &gdk::Display::default().expect("no display"),
         &css,
@@ -231,6 +340,29 @@ fn build_ui(app: &Application, screen: u32, lanes: usize) {
             app.quit();
         }
     }
+
+    // アイドル終了: 最終弾幕から idle_timeout_min 分を過ぎたら自動終了。0 で無効。
+    if idle_timeout_min > 0 {
+        let timeout = Duration::from_secs(idle_timeout_min * 60);
+        let state_for_idle = state.clone();
+        let app_for_idle = app.clone();
+        glib::timeout_add_seconds_local(30, move || {
+            let idle = state_for_idle.borrow().last_activity.elapsed();
+            if idle >= timeout {
+                eprintln!(
+                    "danmaku: idle for {}min; shutting down",
+                    idle_timeout_min
+                );
+                app_for_idle.quit();
+                glib::ControlFlow::Break
+            } else {
+                glib::ControlFlow::Continue
+            }
+        });
+    }
+    // 注: マシン終了時の SIGTERM はデフォルト動作で即終了し、シャットダウンを
+    // 妨げない。残った socket は tmpfs 上にあり再起動時に掃除されるため、
+    // 明示的なシグナルハンドラは置かない。
 }
 
 fn draw_bullets(state: &DanmakuState, area: &gtk4::DrawingArea, cr: &cairo::Context, w: i32, h: i32) {
@@ -402,6 +534,7 @@ fn process_line(line: &str, state: &Rc<RefCell<DanmakuState>>) {
     };
     let mut st = state.borrow_mut();
     spawn_messages(&mut st, &payload.messages);
+    st.last_activity = Instant::now();
 }
 
 fn x11_handles(surface: &gdk::Surface) -> Option<(*mut x11::xlib::Display, x11::xlib::Window)> {
