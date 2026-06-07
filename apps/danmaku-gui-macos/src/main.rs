@@ -1,24 +1,23 @@
-// Phase 8: danmaku-gui (macOS)
+// danmaku (macOS): 透過弾幕オーバーレイ
 //
 // 単一バイナリで以下 2 つの動作モードを持つ:
-//   danmaku-gui              引数なし or `serve` → 常駐 (透過オーバーレイ + socket listener)
-//   danmaku-gui send "..."   → 常駐インスタンスに送信して即終了
+//   danmaku [serve]          引数なし or `serve` → 常駐 (透過オーバーレイ + socket listener)
+//   danmaku send "..."       → 常駐インスタンスに送信して即終了 (未起動なら自動起動)
 //
-// 内部 IPC: Unix domain socket ($TMPDIR/danmaku.sock)。
+// 内部 IPC: Unix domain socket ($TMPDIR/danmaku-{screen}.sock)。
 // 描画駆動: CATextLayer + CABasicAnimation を弾ごとに 1 個 (宣言的、macOS 流)。
-//
-// 動作確認用に背景をわずかに着色して領域を可視化する。本実装に進む際は BACKGROUND_TINT を None に戻す。
+// 自動起動: setsid で親から切り離した自プロセスを `serve` として起動する (macOS でも有効)。
 
 use std::cell::RefCell;
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::os::unix::process::CommandExt; // PoC: setsid 自己再起動
+use std::os::unix::process::CommandExt; // setsid 自己再起動
 use std::path::{Path, PathBuf};
 use std::process::{Command as ProcCommand, ExitCode, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::{Duration, Instant}; // PoC: wait_for_socket
+use std::time::{Duration, Instant}; // wait_for_socket
 
 use block2::RcBlock;
 use clap::{Parser, Subcommand};
@@ -173,8 +172,8 @@ fn run_send(screen: u32, payload: Payload) -> ExitCode {
     let mut stream = match UnixStream::connect(&path) {
         Ok(s) => s,
         Err(_) => {
-            // PoC: serve 未起動なら自分自身を切り離して起動し、socket を待つ。
-            eprintln!("danmaku: serve not running, spawning (PoC)…");
+            // serve 未起動なら自分自身を切り離して起動し、socket が立つのを待つ。
+            eprintln!("danmaku: serve not running, launching it");
             if let Err(e) = spawn_serve(screen) {
                 eprintln!("danmaku: failed to spawn serve: {e}");
                 return ExitCode::FAILURE;
@@ -192,11 +191,12 @@ fn run_send(screen: u32, payload: Payload) -> ExitCode {
         eprintln!("danmaku: failed to write to {}: {e}", path.display());
         return ExitCode::FAILURE;
     }
+    println!("sent {} message(s) to screen {screen}", payload.messages.len());
     ExitCode::SUCCESS
 }
 
-// PoC: 自分自身を `serve` として、親から切り離した新セッションで起動する。
-// （Linux 版 spawn_serve の setsid 方式が macOS でも通用するかの検証用）
+// 自分自身を `serve --screen N` として、親から切り離した新セッションで起動する。
+// setsid 方式は macOS でも有効 (フェーズ0 で検証済み)。
 fn spawn_serve(screen: u32) -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
     let mut cmd = ProcCommand::new(exe);
@@ -218,7 +218,7 @@ fn spawn_serve(screen: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-// PoC: serve 起動直後の socket が listen 可能になるまで接続を試行する。
+// serve 起動直後の socket が listen 可能になるまで接続を試行する。
 fn wait_for_socket(path: &Path, timeout: Duration) -> Result<UnixStream, String> {
     let start = Instant::now();
     loop {

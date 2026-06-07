@@ -208,9 +208,9 @@ GUI 本体に手を入れるが、方式は実績あり（NSTimer 等）でリ�
 
 ### フェーズ 4: 自動起動の本実装（PoC を反映）
 
-- [ ] フェーズ 0 の PoC 結果に沿って `spawn_serve` + `wait_for_socket` を本実装（5 節）。
-- [ ] send 成功時の `sent N message(s) to screen N` 出力（9 節）。
-- [ ] 自動起動 → 弾幕表示の一連を実機確認。
+- [x] フェーズ 0 の PoC 結果に沿って `spawn_serve` + `wait_for_socket` を本実装に昇格（PoC マーカー除去、setsid 方式で確定）（5 節）。
+- [x] send 成功時の `sent N message(s) to screen N` 出力（9 節）。
+- [x] 自動起動 → 弾幕表示の一連を実機確認（未起動→`launching it`→送信、既存起動時は即送信、いずれも `sent N message(s)` 出力を確認）。
 
 ### フェーズ 5: ドキュメント整合
 
