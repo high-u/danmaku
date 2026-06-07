@@ -22,7 +22,7 @@ macOS 上で「透過 / クリックスルー / 最前面 / 全 Space 表示 / �
 - 【事実】SPECS 初版は `danmaku-cli` (送信専用、クロス OS) と `danmaku-gui-*` (常駐、OS 別) の 2 バイナリ構成だった。
 - 【事実】socket は「常駐プロセス ↔ ephemeral 送信プロセス」の通信のために存在しており、両者が同じバイナリの異なるサブコマンドであっても (どちらも別プロセスである限り) socket は不可避。
 - 【事実】SPECS 内の「差し替え可能性」(SPECS 278 行) は SKILL.md が叩くコマンド名の問題で、別バイナリにすべき根拠ではない。
-- 【解釈】専用クライアントを別バイナリ化する実利が薄い (バイナリ 1 個減る程度) ため、macOS 側を `danmaku-gui` 単一バイナリ + `serve` / `send` サブコマンドに統合した。socket は GUI 内部の実装詳細に降格し、利用者・AI エージェントは `danmaku-gui send "..."` だけを叩く。
+- 【解釈】専用クライアントを別バイナリ化する実利が薄い (バイナリ 1 個減る程度) ため、macOS 側を単一バイナリ + `serve` / `send` サブコマンドに統合した。socket は GUI 内部の実装詳細に降格し、利用者・AI エージェントは `danmaku send "..."` だけを叩く（バイナリ名は当初 `danmaku-gui` だったが、後に Linux 版と揃えて `danmaku` に統一）。
 - 【解釈】Linux 側の追従 (Phase 7) で同じ統合形に揃える方針。
 
 ### 0.3 描画駆動: 手動 tick → CABasicAnimation 個別
@@ -76,7 +76,7 @@ macOS 上で「透過 / クリックスルー / 最前面 / 全 Space 表示 / �
 
 - 【事実】macOS では `$TMPDIR` がユーザ単位の一時ディレクトリを指す (`/var/folders/.../T/` 等)。複数ユーザログイン環境でも干渉しない。
 - 【事実】Linux の `$XDG_RUNTIME_DIR` に対応する macOS の慣習が `$TMPDIR`。
-- 【解釈】socket パスを `$TMPDIR/danmaku.sock` (未設定なら `/tmp/danmaku.sock`) にすることで、ユーザ単位の隔離が自然に得られる。
+- 【解釈】socket パスを `$TMPDIR/danmaku-{screen}.sock` (未設定なら `/tmp/danmaku-{screen}.sock`) にすることで、ユーザ単位の隔離と screen 単位の分離が自然に得られる。Linux の `danmaku-{screen}.sock` に概念対応。
 
 ## 2. 一般的なアプローチ
 
@@ -87,10 +87,10 @@ macOS 上で「透過 / クリックスルー / 最前面 / 全 Space 表示 / �
 - 【事実】CABasicAnimation の `position.x` キーパスに `fromValue` / `toValue` を設定すると、Core Animation がフレーム間補間を担当する (GPU 同期)。
 - 【解釈】Linux 版の手動 tick (`add_tick_callback`) と比べると構造は違うが、Core Animation を信頼する書き方は macOS のお作法。「速度ジッタは duration、stagger は beginTime」で振る舞いを表現できる。
 
-### `Cargo.toml` `[[bin]] name = "danmaku-gui"`
+### `Cargo.toml` `[[bin]] name = "danmaku"`
 
 - 【事実】Cargo はデフォルトでパッケージ名をバイナリ名にするが、`[[bin]]` セクションで明示できる。
-- 【解釈】ソース管理上のディレクトリ名は OS を識別するため `danmaku-gui-macos` のままにし、ビルド成果物は OS 共通の `danmaku-gui` に揃える。Linux 機と macOS 機が同一インストールに共存することは無いので、PATH 上の名前衝突は起きない。
+- 【解釈】ソース管理上のディレクトリ名は OS を識別するため `danmaku-gui-macos` のままにし、ビルド成果物は Linux 版と同じ `danmaku` に揃える（コマンド体系を OS 間で一致させる）。Linux 機と macOS 機が同一インストールに共存することは無いので、PATH 上の名前衝突は起きない。
 
 ### `objc2-quartz-core` の features 制限
 
@@ -113,11 +113,11 @@ macOS 上で「透過 / クリックスルー / 最前面 / 全 Space 表示 / �
 - 【事実】本来は `NSAttributedString` を使う方が attributed 描画と一貫するが、CATextLayer は内部で plain string を独自描画するため、寸法計測だけ AppKit を借りる形になる。
 - 【解釈】CATextLayer 自体は寸法を返す API を持たない (`bounds` を呼び出し側が決める設計)。AppKit による外部計測が現実解。
 
-### 確認用の半透明青背景 (`BACKGROUND_TINT`)
+### 確認用の半透明青背景 (`BACKGROUND_TINT` + `config.debug_background`)
 
-- 【事実】見た目の検証用。本番では `None` に戻して `NSColor.clearColor()` で完全透過にする。
-- 【事実】コード中にコメントで「本実装に進む際は None に戻す」と明記済み。
-- 【解釈】トレイアイコン (Phase 6) など常駐の手がかりが揃ってから消す予定。それまでは「動いているのか見える」状態を維持。
+- 【事実】見た目の検証用。デフォルトは `NSColor.clearColor()` で完全透過。`~/.config/danmaku/config.toml` の `debug_background = true` のときだけ `BACKGROUND_TINT` で薄く着色する。
+- 【事実】`BACKGROUND_TINT` は色値の定数として残し、適用可否を config で制御する（Linux の `debug_background` と同じ意味）。
+- 【解釈】常時点灯（旧実装）から設定化したことで、本番は完全透過のまま、領域確認が必要なときだけ設定で点灯できる。
 
 ## 4. 検証済み / 未検証
 
@@ -130,12 +130,17 @@ macOS 上で「透過 / クリックスルー / 最前面 / 全 Space 表示 / �
 - 縦 75% / 横 100%・縦中央配置
 - 複数弾レーン分散 + 速度ジッタ + stagger
 - 重なり警告ログ (空きレーン無し時)
-- `danmaku-gui send "..."` 経由で常駐側に弾幕が流れる
+- `danmaku send "..."` 経由で常駐側に弾幕が流れる
 - send モードの正常終了 + 接続失敗時の非ゼロ終了
+- レーン数可変 (`config.lanes`)・フォントのレーン高連動
+- `config.debug_background` による背景着色の切替
+- アイドル自動終了 (`idle_timeout_min`、専用 30 秒タイマー。`=1`/`=3` で常駐継続→終了を確認)
+- send の serve 自動起動 (setsid 自己再起動。未起動→自動起動→送信を確認)
+- per-screen socket 配線 (`--screen` で `danmaku-{screen}.sock` / `serve --screen N` が分離)
 
 ### 未検証
 
-- マルチモニタ環境 (現状 `NSScreen.mainScreen()` 固定、`--screen N` の serve 側未対応 → Phase 8 とは別のフェーズで対応)
+- マルチモニタの実配置 (socket / `--screen` の配線は済み。実際の描画先選択は現状 `NSScreen.mainScreen()` 固定で、マルチモニタ環境での検証を伴って今後対応)
 - 長時間連投時のメモリ挙動 (NSTimer 内の `removeFromSuperlayer` + `bullets.retain` で都度回収しているが、実機検証は短時間のみ)
 - フルスクリーンアプリ (動画プレイヤ等) の上での表示
 

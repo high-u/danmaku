@@ -214,8 +214,8 @@ GUI 本体に手を入れるが、方式は実績あり（NSTimer 等）でリ�
 
 ### フェーズ 5: ドキュメント整合
 
-- [ ] `IMPLEMENTATION.md` のマルチモニタ「未対応」記述・独自オプション削除を反映。
-- [ ] Linux README をベースに macOS 版 README を作成（設定・自動起動・アイドル終了・`--screen`）。
+- [x] `IMPLEMENTATION.md` を現状反映（バイナリ名 `danmaku`、socket `danmaku-{screen}.sock`、`debug_background` 設定化、アイドル終了/自動起動/per-screen 配線を検証済みに追記、マルチモニタは「実配置のみ保留」に更新）。
+- [x] Linux README をベースに macOS 版 README を作成（前提/ビルド導入/実行例/`--screen` の保留注記/設定/アイドル終了）。macOS 版はリリース成果物が無いためインストールはソースビルドで記載。
 
 ### 依存関係メモ
 
