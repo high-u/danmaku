@@ -101,11 +101,12 @@ Linux の per-screen socket + 対象モニタ配置に合わせる。
   - 現状: `socket_path()` → `$TMPDIR/danmaku.sock` 固定。
   - 変更: `socket_path(screen: u32)` → `$TMPDIR/danmaku-{screen}.sock`（未設定時 `/tmp`）。Linux の `danmaku-{screen}.sock`（XDG_RUNTIME_DIR）に概念対応。
 - `Serve` サブコマンド: `{ screen: u32 (default 0) }` を受け取る（現状は引数なし）。
-- 対象モニタ選択:
-  - 現状: `NSScreen::mainScreen()` 固定。
-  - 変更: `NSScreen::screens(mtm)` の `screen` 番目を選択（範囲外なら Linux と同じくエラーログを出して abort）。Linux の `monitor_for_screen`（622 行）に対応。
+- 対象モニタ選択（**フェーズ3b で保留中**）:
+  - 現状: `NSScreen::mainScreen()` 固定（配線後もここは未変更）。
+  - 変更（保留）: `NSScreen::screens(mtm)` の `screen` 番目を選択（範囲外なら Linux と同じくエラーログを出して abort）。Linux の `monitor_for_screen`（622 行）に対応。
   - パネルの frame をその screen の `frame()` 基準で計算（縦 75% / 縦中央は現状ロジックを流用）。
-- send 側: `--screen` を socket パスと、自動起動する `serve --screen N` に伝搬。
+  - 保留理由: 開発環境が単一モニタで視認確認できないため。配線（socket/spawn）は 3a で実施済み。
+- send 側: `--screen` を socket パスと、自動起動する `serve --screen N` に伝搬（**3a で実施済み**）。
 
 ### 9. 細部のログ/メッセージ整合
 
@@ -187,11 +188,23 @@ GUI 本体に手を入れるが、方式は実績あり（NSTimer 等）でリ�
 
 ### フェーズ 3: マルチモニタ対応
 
-- [ ] `socket_path(screen)` を `danmaku-{screen}.sock` 化（8 節）。
-- [ ] `Serve { screen }` / `Send { screen, messages }` の `--screen` 配線。
-- [ ] `NSScreen::screens()` から対象選択・パネル配置（範囲外は abort）。
-- [ ] 自動起動する `serve --screen N` への伝搬。
-- [ ] 実機（可能ならマルチモニタ）で `--screen` 配置を確認。番号の意味が環境依存である点を README に明記。
+> **方針（重要）**: 開発環境にマルチモニタが無く、画面選択ロジックは視認確認できない。
+> そこで **3a（socket/`--screen` の配線）は実施**し、**3b（実際の画面選択）は保留**する。
+> 配線だけ先に入れる理由: フェーズ4 の自動起動（`serve --screen N` を spawn）が screen を渡す
+> 前提のため、ここを通しておかないとフェーズ4で spawn 経路を再度触ることになるから。
+> 保留中の状態: `--screen N` は socket パス（`danmaku-{screen}.sock`）と spawn には反映されるが、
+> 描画先は常に `mainScreen`（screen 番号で実際のモニタは切り替わらない）。
+
+#### フェーズ 3a: 配線（実施）
+
+- [x] `socket_path(screen)` を `danmaku-{screen}.sock` 化（8 節）。
+- [x] `Serve { screen }` / `Send { screen, messages }` の `--screen` を `socket_path` / 自動起動 `serve --screen N` まで配線。
+- [x] 単一モニタ（screen=0）で回帰確認。
+
+#### フェーズ 3b: 画面選択（保留 — マルチモニタ環境が用意でき次第）
+
+- [ ] `NSScreen::screens()` から対象選択・パネル配置（範囲外は abort）。※現状は `mainScreen` 固定。
+- [ ] 実機（マルチモニタ）で `--screen` 配置を確認。番号の意味が環境依存である点を README に明記。
 
 ### フェーズ 4: 自動起動の本実装（PoC を反映）
 

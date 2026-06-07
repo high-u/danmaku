@@ -147,13 +147,11 @@ fn load_config() -> Config {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    // screen はフェーズ3 (マルチモニタ socket 切替) で配線する。現状は単一 socket。
+    // フェーズ3a: screen を socket パス / 自動起動まで配線。
+    // フェーズ3b（実際の画面選択）は保留中で、描画先は mainScreen 固定。
     match cli.command.unwrap_or(Command::Serve { screen: 0 }) {
-        Command::Serve { screen: _ } => run_serve(),
-        Command::Send {
-            screen: _,
-            messages,
-        } => run_send(Payload { messages }),
+        Command::Serve { screen } => run_serve(screen),
+        Command::Send { screen, messages } => run_send(screen, Payload { messages }),
     }
 }
 
@@ -161,7 +159,7 @@ fn main() -> ExitCode {
 // send モード
 // ============================================================================
 
-fn run_send(payload: Payload) -> ExitCode {
+fn run_send(screen: u32, payload: Payload) -> ExitCode {
     let mut line = match serde_json::to_string(&payload) {
         Ok(s) => s,
         Err(e) => {
@@ -171,13 +169,13 @@ fn run_send(payload: Payload) -> ExitCode {
     };
     line.push('\n');
 
-    let path = socket_path();
+    let path = socket_path(screen);
     let mut stream = match UnixStream::connect(&path) {
         Ok(s) => s,
         Err(_) => {
             // PoC: serve 未起動なら自分自身を切り離して起動し、socket を待つ。
             eprintln!("danmaku: serve not running, spawning (PoC)…");
-            if let Err(e) = spawn_serve() {
+            if let Err(e) = spawn_serve(screen) {
                 eprintln!("danmaku: failed to spawn serve: {e}");
                 return ExitCode::FAILURE;
             }
@@ -199,10 +197,12 @@ fn run_send(payload: Payload) -> ExitCode {
 
 // PoC: 自分自身を `serve` として、親から切り離した新セッションで起動する。
 // （Linux 版 spawn_serve の setsid 方式が macOS でも通用するかの検証用）
-fn spawn_serve() -> std::io::Result<()> {
+fn spawn_serve(screen: u32) -> std::io::Result<()> {
     let exe = std::env::current_exe()?;
     let mut cmd = ProcCommand::new(exe);
     cmd.arg("serve")
+        .arg("--screen")
+        .arg(screen.to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -264,7 +264,7 @@ impl DanmakuState {
     }
 }
 
-fn run_serve() -> ExitCode {
+fn run_serve(screen: u32) -> ExitCode {
     let mtm = match MainThreadMarker::new() {
         Some(m) => m,
         None => {
@@ -282,7 +282,7 @@ fn run_serve() -> ExitCode {
     // socket listener を別スレッドで起動。
     // パネルを作る前に socket を確保することで、二重起動の負け側が UI を出さずに即終了できる。
     let (tx, rx) = mpsc::channel::<Payload>();
-    let socket_path_buf = socket_path();
+    let socket_path_buf = socket_path(screen);
     match start_listener(socket_path_buf.clone(), tx) {
         Ok(()) => eprintln!("danmaku: listening on {}", socket_path_buf.display()),
         Err(e) => {
@@ -291,14 +291,17 @@ fn run_serve() -> ExitCode {
         }
     }
 
-    let screen = match NSScreen::mainScreen(mtm) {
+    // フェーズ3b 保留: 本来は NSScreen::screens()[screen] を選ぶが、開発環境が単一モニタで
+    // 視認確認できないため mainScreen 固定。socket パス / spawn への screen 配線は 3a で実施済み。
+    let _ = screen; // 描画先選択ではまだ未使用（socket パスにのみ反映済み）
+    let display = match NSScreen::mainScreen(mtm) {
         Some(s) => s,
         None => {
             eprintln!("danmaku: no main screen");
             return ExitCode::FAILURE;
         }
     };
-    let screen_frame = screen.frame();
+    let screen_frame = display.frame();
     let target_h = screen_frame.size.height * 0.75;
     let target_y = screen_frame.origin.y + (screen_frame.size.height - target_h) / 2.0;
     let panel_rect = NSRect {
@@ -358,7 +361,7 @@ fn run_serve() -> ExitCode {
     // メインスレッドの状態
     let state = Rc::new(RefCell::new(DanmakuState::new(lanes)));
     let content_size = content.frame().size;
-    let contents_scale = screen.backingScaleFactor();
+    let contents_scale = display.backingScaleFactor();
     // フォントはレーン高さに連動させる (Linux と同じ考え方)。
     let font_size = (content_size.height / lanes as f64) * FONT_LANE_RATIO;
     let font = NSFont::boldSystemFontOfSize(font_size);
@@ -513,9 +516,9 @@ fn ensure_socket_available(path: &Path) -> Result<(), String> {
     }
 }
 
-fn socket_path() -> PathBuf {
+fn socket_path(screen: u32) -> PathBuf {
     let dir = std::env::var_os("TMPDIR").unwrap_or_else(|| "/tmp".into());
-    PathBuf::from(dir).join("danmaku.sock")
+    PathBuf::from(dir).join(format!("danmaku-{screen}.sock"))
 }
 
 // ============================================================================
