@@ -1,10 +1,10 @@
 # macOS 版を Linux 版に合わせる改修計画
 
-`apps/danmaku-gui-macos` を `apps/danmaku-linux` の概念・機能に揃えるための改修計画。
+`apps/danmaku-macos` を `apps/danmaku-linux` の概念・機能に揃えるための改修計画。
 
 ## 方針
 
-- ゴール: macOS 版 (`danmaku-gui-macos`) を Linux 版 (`danmaku-linux`) の概念・機能・コマンド体系に合わせる。
+- ゴール: macOS 版 (`danmaku-macos`) を Linux 版 (`danmaku-linux`) の概念・機能・コマンド体系に合わせる。
 - **原則: 機能・概念は Linux に合わせるが、OS がアプリをどう扱うか（プロセス常駐方式・Dock/タスクバー可視性・アクティベーションポリシー・ウィンドウ管理など）は各 OS の思想に従う。** Dock に出さないのも「Linux に合わせるため」ではなく「macOS でバックグラウンド常駐補助はエージェントにするのが正しいから」という理由で行う（結果が一致するだけ）。
 - 描画方式 (Core Animation の宣言的アニメーション vs Linux の手動 tick) は **揃えない**。これは上記原則の一例で、OS のお作法に沿った内部実装の差であり、振る舞い (速度ジッタ=duration、stagger=beginTime) は既に等価。IMPLEMENTATION.md 0.3 の判断を踏襲する。
 - 以下の確定事項は対話で決定済み。
@@ -28,7 +28,7 @@
 
 - 現状: バイナリ名 `danmaku-gui`、clap `name = "danmaku-gui"`、全ログプレフィックス `danmaku-gui:`。
 - 変更:
-  - `Cargo.toml` に `[[bin]] name = "danmaku"` を追加（ディレクトリ名 `danmaku-gui-macos` は OS 識別のため維持。IMPLEMENTATION.md 2 節の方針どおり、ソース管理上の名前と成果物名を分離）。
+  - `Cargo.toml` に `[[bin]] name = "danmaku"` を追加（ディレクトリ名 `danmaku-macos` は OS 識別のため維持。IMPLEMENTATION.md 2 節の方針どおり、ソース管理上の名前と成果物名を分離）。
   - clap `#[command(name = "danmaku", ...)]` に変更。about も Linux に倣い `"Transparent danmaku overlay for macOS."` 等へ。
   - `eprintln!`/`println!` のプレフィックスを `danmaku:` に統一。
 
@@ -116,10 +116,10 @@ Linux の per-screen socket + 対象モニタ配置に合わせる。
 
 ## 影響を受けるファイル
 
-- `apps/danmaku-gui-macos/src/main.rs` — 上記すべての本体改修。
-- `apps/danmaku-gui-macos/Cargo.toml` — `[[bin]] name = "danmaku"`、`toml`・`libc` 依存追加。
-- `apps/danmaku-gui-macos/IMPLEMENTATION.md` — マルチモニタ「未対応」記述の更新、独自オプション削除の反映（任意だが整合のため推奨）。
-- （任意）`apps/danmaku-gui-macos/README.md` 相当 — Linux README に倣い、設定・自動起動・アイドル終了・`--screen` を記載。現状 macOS 側に README は無いため、Linux README をベースに新規作成を検討。
+- `apps/danmaku-macos/src/main.rs` — 上記すべての本体改修。
+- `apps/danmaku-macos/Cargo.toml` — `[[bin]] name = "danmaku"`、`toml`・`libc` 依存追加。
+- `apps/danmaku-macos/IMPLEMENTATION.md` — マルチモニタ「未対応」記述の更新、独自オプション削除の反映（任意だが整合のため推奨）。
+- （任意）`apps/danmaku-macos/README.md` 相当 — Linux README に倣い、設定・自動起動・アイドル終了・`--screen` を記載。現状 macOS 側に README は無いため、Linux README をベースに新規作成を検討。
 
 ## 実装順序（推奨）
 
