@@ -36,14 +36,19 @@ use rand::seq::IndexedRandom;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
-const BACKGROUND_TINT: Option<(f64, f64, f64, f64)> = Some((0.39, 0.63, 0.86, 0.08));
+// debug_background=true のときに表示する確認用の薄い背景色。
+const BACKGROUND_TINT: (f64, f64, f64, f64) = (0.39, 0.63, 0.86, 0.08);
 
-const MAX_LINES: usize = 8;
+// デフォルト値。設定ファイル (~/.config/danmaku/config.toml) があれば上書きされる。
+const DEFAULT_LANES: usize = 16;
+const DEFAULT_IDLE_TIMEOUT_MIN: u64 = 30;
+const MIN_LANES: u32 = 1;
+const MAX_LANES: u32 = 128;
 const BASE_SPEED: f64 = 250.0; // px/sec
 const SPEED_JITTER: f64 = 0.3; // ±30%
 const SPAWN_GAP_SEC: f64 = 1.5; // 同レーンの最小再使用間隔
 const PAYLOAD_STAGGER_MAX_SEC: f64 = 0.25; // 同一ペイロード内のずらし最大値
-const FONT_SIZE: f64 = 48.0;
+const FONT_LANE_RATIO: f64 = 0.6; // フォント絶対高 / レーン高
 const TICK_INTERVAL_SEC: f64 = 0.1; // メインスレッド側のポーリング周期
 
 // ============================================================================
@@ -51,7 +56,7 @@ const TICK_INTERVAL_SEC: f64 = 0.1; // メインスレッド側のポーリン�
 // ============================================================================
 
 #[derive(Parser, Debug)]
-#[command(name = "danmaku-gui", about = "macOS 用透過オーバーレイ弾幕表示 (serve / send 統合)")]
+#[command(name = "danmaku", about = "Transparent danmaku overlay for macOS.")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -59,23 +64,18 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// 常駐モード (引数なしと同義)。透過オーバーレイを表示し socket で送信を待つ。
-    Serve,
-    /// 常駐インスタンスに JSON ペイロードを送信して即終了。
-    Send {
-        /// 表示先ディスプレイ番号
+    /// Run the overlay (default when no subcommand is given).
+    Serve {
+        /// Display index (from `NSScreen::screens()`).
         #[arg(long, default_value_t = 0)]
         screen: u32,
-        /// 文字色 (常駐側の設定を上書き)
-        #[arg(long)]
-        color: Option<String>,
-        /// 速度倍率 (常駐側の設定を上書き)
-        #[arg(long)]
-        speed: Option<f64>,
-        /// フォントサイズ (常駐側の設定を上書き)
-        #[arg(long)]
-        size: Option<u32>,
-        /// 表示する文字列 (1 個以上)
+    },
+    /// Send messages to the overlay (starting it if needed) and exit.
+    Send {
+        /// Target display index.
+        #[arg(long, default_value_t = 0)]
+        screen: u32,
+        /// Messages to display (one or more).
         #[arg(required = true)]
         messages: Vec<String>,
     },
@@ -87,14 +87,57 @@ enum Command {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Payload {
-    screen: u32,
     messages: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    color: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    speed: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    size: Option<u32>,
+}
+
+// ============================================================================
+// 設定ファイル (~/.config/danmaku/config.toml)
+// ============================================================================
+
+// 正常にパースできた場合のみ採用し、欠けたキーは個別のデフォルト値で埋める。
+// 未知のキーは無視。ファイルが無い/読めない/壊れている場合は全項目デフォルト。
+#[derive(Debug, Deserialize)]
+#[serde(default)]
+struct Config {
+    /// レーン数 (1-128 にクランプ)。
+    lanes: u32,
+    /// 最終弾幕からこの分数を過ぎたら自動終了。0 で無効 (終了しない)。
+    idle_timeout_min: u64,
+    /// 領域確認用の薄い背景色を表示する (開発用)。
+    debug_background: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            lanes: DEFAULT_LANES as u32,
+            idle_timeout_min: DEFAULT_IDLE_TIMEOUT_MIN,
+            debug_background: false,
+        }
+    }
+}
+
+fn config_path() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Some(PathBuf::from(dir).join("danmaku").join("config.toml"));
+    }
+    let home = std::env::var_os("HOME")?;
+    Some(
+        PathBuf::from(home)
+            .join(".config")
+            .join("danmaku")
+            .join("config.toml"),
+    )
+}
+
+fn load_config() -> Config {
+    let Some(path) = config_path() else {
+        return Config::default();
+    };
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Config::default();
+    };
+    toml::from_str::<Config>(&text).unwrap_or_default()
 }
 
 // ============================================================================
@@ -103,21 +146,13 @@ struct Payload {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve) {
-        Command::Serve => run_serve(),
+    // screen はフェーズ3 (マルチモニタ socket 切替) で配線する。現状は単一 socket。
+    match cli.command.unwrap_or(Command::Serve { screen: 0 }) {
+        Command::Serve { screen: _ } => run_serve(),
         Command::Send {
-            screen,
-            color,
-            speed,
-            size,
+            screen: _,
             messages,
-        } => run_send(Payload {
-            screen,
-            messages,
-            color,
-            speed,
-            size,
-        }),
+        } => run_send(Payload { messages }),
     }
 }
 
@@ -129,7 +164,7 @@ fn run_send(payload: Payload) -> ExitCode {
     let mut line = match serde_json::to_string(&payload) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("danmaku-gui: failed to serialize payload: {e}");
+            eprintln!("danmaku: failed to serialize payload: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -140,22 +175,22 @@ fn run_send(payload: Payload) -> ExitCode {
         Ok(s) => s,
         Err(_) => {
             // PoC: serve 未起動なら自分自身を切り離して起動し、socket を待つ。
-            eprintln!("danmaku-gui: serve not running, spawning (PoC)…");
+            eprintln!("danmaku: serve not running, spawning (PoC)…");
             if let Err(e) = spawn_serve() {
-                eprintln!("danmaku-gui: failed to spawn serve: {e}");
+                eprintln!("danmaku: failed to spawn serve: {e}");
                 return ExitCode::FAILURE;
             }
             match wait_for_socket(&path, Duration::from_secs(5)) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("danmaku-gui: {e}");
+                    eprintln!("danmaku: {e}");
                     return ExitCode::FAILURE;
                 }
             }
         }
     };
     if let Err(e) = stream.write_all(line.as_bytes()) {
-        eprintln!("danmaku-gui: failed to write to {}: {e}", path.display());
+        eprintln!("danmaku: failed to write to {}: {e}", path.display());
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
@@ -211,15 +246,17 @@ struct Bullet {
 }
 
 struct DanmakuState {
+    lanes: usize,
     bullets: Vec<Bullet>,
-    last_spawn_at: Vec<Option<f64>>,
+    last_spawn_at: Vec<Option<f64>>, // length == lanes
 }
 
 impl DanmakuState {
-    fn new() -> Self {
+    fn new(lanes: usize) -> Self {
         Self {
+            lanes,
             bullets: Vec::new(),
-            last_spawn_at: vec![None; MAX_LINES],
+            last_spawn_at: vec![None; lanes],
         }
     }
 }
@@ -228,10 +265,13 @@ fn run_serve() -> ExitCode {
     let mtm = match MainThreadMarker::new() {
         Some(m) => m,
         None => {
-            eprintln!("danmaku-gui: must run on main thread");
+            eprintln!("danmaku: must run on main thread");
             return ExitCode::FAILURE;
         }
     };
+
+    let config = load_config();
+    let lanes = config.lanes.clamp(MIN_LANES, MAX_LANES) as usize;
 
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
@@ -241,9 +281,9 @@ fn run_serve() -> ExitCode {
     let (tx, rx) = mpsc::channel::<Payload>();
     let socket_path_buf = socket_path();
     match start_listener(socket_path_buf.clone(), tx) {
-        Ok(()) => eprintln!("danmaku-gui: listening on {}", socket_path_buf.display()),
+        Ok(()) => eprintln!("danmaku: listening on {}", socket_path_buf.display()),
         Err(e) => {
-            eprintln!("danmaku-gui: failed to start listener: {e}");
+            eprintln!("danmaku: failed to start listener: {e}");
             return ExitCode::FAILURE;
         }
     }
@@ -251,7 +291,7 @@ fn run_serve() -> ExitCode {
     let screen = match NSScreen::mainScreen(mtm) {
         Some(s) => s,
         None => {
-            eprintln!("danmaku-gui: no main screen");
+            eprintln!("danmaku: no main screen");
             return ExitCode::FAILURE;
         }
     };
@@ -291,36 +331,48 @@ fn run_serve() -> ExitCode {
     panel.setIgnoresMouseEvents(true);
     panel.setHidesOnDeactivate(false);
 
-    let bg = match BACKGROUND_TINT {
-        Some((r, g, b, a)) => NSColor::colorWithCalibratedRed_green_blue_alpha(r, g, b, a),
-        None => NSColor::clearColor(),
+    let bg = if config.debug_background {
+        let (r, g, b, a) = BACKGROUND_TINT;
+        NSColor::colorWithCalibratedRed_green_blue_alpha(r, g, b, a)
+    } else {
+        NSColor::clearColor()
     };
     panel.setBackgroundColor(Some(&bg));
 
     // contentView を layer-hosting にして root layer を取得
     let Some(content) = panel.contentView() else {
-        eprintln!("danmaku-gui: panel has no contentView");
+        eprintln!("danmaku: panel has no contentView");
         return ExitCode::FAILURE;
     };
     content.setWantsLayer(true);
     let Some(root_layer) = content.layer() else {
-        eprintln!("danmaku-gui: contentView has no layer");
+        eprintln!("danmaku: contentView has no layer");
         return ExitCode::FAILURE;
     };
 
     panel.orderFrontRegardless();
 
     // メインスレッドの状態
-    let state = Rc::new(RefCell::new(DanmakuState::new()));
+    let state = Rc::new(RefCell::new(DanmakuState::new(lanes)));
     let content_size = content.frame().size;
     let contents_scale = screen.backingScaleFactor();
-    let font = NSFont::boldSystemFontOfSize(FONT_SIZE);
+    // フォントはレーン高さに連動させる (Linux と同じ考え方)。
+    let font_size = (content_size.height / lanes as f64) * FONT_LANE_RATIO;
+    let font = NSFont::boldSystemFontOfSize(font_size);
 
     // NSTimer で channel を drain + 期限切れ弾 cleanup
-    schedule_tick(state, root_layer, rx, content_size, contents_scale, font);
+    schedule_tick(
+        state,
+        root_layer,
+        rx,
+        content_size,
+        contents_scale,
+        font,
+        font_size,
+    );
 
     eprintln!(
-        "danmaku-gui: serving ({}x{})",
+        "danmaku: serving ({}x{})",
         panel_rect.size.width as i64, panel_rect.size.height as i64
     );
 
@@ -335,6 +387,7 @@ fn schedule_tick(
     content_size: NSSize,
     contents_scale: f64,
     font: Retained<NSFont>,
+    font_size: f64,
 ) {
     // NSTimer の block は main thread でのみ実行されるので、Rc / Receiver を closure に move して問題ない
     let block = RcBlock::new(move |_timer: std::ptr::NonNull<NSTimer>| {
@@ -348,6 +401,7 @@ fn schedule_tick(
                 content_size,
                 contents_scale,
                 &font,
+                font_size,
             );
         }
         // 期限切れ弾を superlayer から除去
@@ -383,7 +437,7 @@ fn start_listener(path: PathBuf, tx: mpsc::Sender<Payload>) -> Result<(), String
                     thread::spawn(move || handle_connection(stream, tx));
                 }
                 Err(e) => {
-                    eprintln!("danmaku-gui: accept failed: {e}");
+                    eprintln!("danmaku: accept failed: {e}");
                 }
             }
         }
@@ -405,7 +459,7 @@ fn handle_connection(stream: UnixStream, tx: mpsc::Sender<Payload>) {
                 }
             }
             Err(e) => {
-                eprintln!("danmaku-gui: JSON parse failed: {e}; line={line:?}");
+                eprintln!("danmaku: JSON parse failed: {e}; line={line:?}");
             }
         }
     }
@@ -441,11 +495,13 @@ fn spawn_messages(
     content_size: NSSize,
     contents_scale: f64,
     font: &NSFont,
+    font_size: f64,
 ) {
     let mut rng = rand::rng();
+    let lanes = state.lanes;
     let now = unsafe { CACurrentMediaTime() };
     for msg in messages {
-        let free: Vec<usize> = (0..MAX_LINES)
+        let free: Vec<usize> = (0..lanes)
             .filter(|&i| {
                 state.last_spawn_at[i]
                     .map(|t| now - t >= SPAWN_GAP_SEC)
@@ -455,8 +511,8 @@ fn spawn_messages(
         let lane = if let Some(&l) = free.choose(&mut rng) {
             l
         } else {
-            let l = rng.random_range(0..MAX_LINES);
-            eprintln!("danmaku-gui: no free lane; overlapping on lane {l}: {msg:?}");
+            let l = rng.random_range(0..lanes);
+            eprintln!("danmaku: no free lane; overlapping on lane {l}: {msg:?}");
             l
         };
         let speed_factor = 1.0 + rng.random_range(-SPEED_JITTER..SPEED_JITTER);
@@ -468,12 +524,14 @@ fn spawn_messages(
         let (layer, duration) = create_bullet_layer(
             msg,
             lane,
+            lanes,
             speed,
             begin_time,
             root_layer,
             content_size,
             contents_scale,
             font,
+            font_size,
         );
         state.bullets.push(Bullet {
             layer,
@@ -485,17 +543,19 @@ fn spawn_messages(
 fn create_bullet_layer(
     text: &str,
     lane: usize,
+    lanes: usize,
     speed: f64,
     begin_time: f64,
     root_layer: &CALayer,
     content_size: NSSize,
     contents_scale: f64,
     font: &NSFont,
+    font_size: f64,
 ) -> (Retained<CATextLayer>, f64) {
     let ns_text = NSString::from_str(text);
     let text_size = measure_text(&ns_text, font);
     let text_w = text_size.width.max(1.0);
-    let text_h = text_size.height.max(FONT_SIZE);
+    let text_h = text_size.height.max(font_size);
 
     let text_layer: Retained<CATextLayer> = CATextLayer::new();
     unsafe {
@@ -505,7 +565,7 @@ fn create_bullet_layer(
         let cf_font: &CFType = unsafe { &*(font as *const NSFont as *const CFType) };
         unsafe { text_layer.setFont(Some(cf_font)) };
     }
-    text_layer.setFontSize(FONT_SIZE);
+    text_layer.setFontSize(font_size);
     text_layer.setForegroundColor(Some(&NSColor::whiteColor().CGColor()));
     text_layer.setContentsScale(contents_scale);
     text_layer.setBounds(NSRect {
@@ -516,7 +576,7 @@ fn create_bullet_layer(
         },
     });
 
-    let y = lane_y(lane, content_size.height);
+    let y = lane_y(lane, content_size.height, lanes);
     let start_x = content_size.width + text_w / 2.0;
     let end_x = -text_w / 2.0;
     text_layer.setPosition(NSPoint { x: end_x, y });
@@ -540,9 +600,9 @@ fn create_bullet_layer(
     (text_layer, duration)
 }
 
-fn lane_y(lane: usize, height: f64) -> f64 {
-    // Phase 7 方針: 内側マージン無し、全高を MAX_LINES で等分し各レーンの中央を返す
-    let slot_h = height / MAX_LINES as f64;
+fn lane_y(lane: usize, height: f64, lanes: usize) -> f64 {
+    // 内側マージン無し、全高を lanes で等分し各レーンの中央を返す
+    let slot_h = height / lanes as f64;
     slot_h * (lane as f64 + 0.5)
 }
 

@@ -53,6 +53,7 @@ Linux の `Config` 機構を移植する。
   - `DanmakuState` に `lanes: usize` フィールドを追加（`last_spawn_at` の長さもこれに連動）。Linux の `DanmakuState` 124 行と同様。
   - `lane_y(lane, height, lanes)` に lanes を引数で渡す形へ変更。
   - `spawn_messages` のレーン探索 `0..MAX_LINES` を `0..state.lanes` に変更。
+  - **フォントをレーン高さ連動にする**（考え方を Linux に揃える。完全同値である必要はない）: 固定 `FONT_SIZE = 48.0` を廃止し、Linux と同じ `FONT_LANE_RATIO = 0.6` を導入。`font_size = (content_size.height / lanes) * FONT_LANE_RATIO` を起動時に算出して `NSFont` を生成し、その値を `setFontSize` とテキスト計測 (`measure_text` 用フォント・`text_h`) まで一貫して使う（計測フォントと描画サイズがズレると弾の位置計算が崩れるため、単一の font_size を引き回す）。
 
 ### 4. デバッグ背景の設定化
 
@@ -167,12 +168,14 @@ Linux の per-screen socket + 対象モニタ配置に合わせる。
 
 純粋 Rust ロジックで macOS 依存が薄く、確実に進められる部分。PoC の結果に左右されない。
 
-- [ ] コマンド/バイナリ名統一（`danmaku`）＋ログプレフィックス `danmaku:`（1 節）。
-- [ ] Payload 簡素化・独自オプション削除（7 節）。
-- [ ] 設定ファイル対応 `Config`/`config_path`/`load_config`＋定数移植＋`toml` 依存追加（2 節）。
-- [ ] レーン数可変化（`MAX_LINES` 廃止 → `state.lanes`）（3 節）。
-- [ ] `debug_background` 設定化（デフォルト透過）（4 節）。
-- [ ] 各ステップ後 `cargo build`。
+- [x] コマンド/バイナリ名統一（`danmaku`）＋ログプレフィックス `danmaku:`（1 節）。
+- [x] Payload 簡素化・独自オプション削除（7 節）。
+- [x] 設定ファイル対応 `Config`/`config_path`/`load_config`＋定数移植＋`toml` 依存追加（2 節）。
+- [x] レーン数可変化（`MAX_LINES` 廃止 → `state.lanes`）（3 節）。
+- [x] フォントをレーン高さ連動化（`FONT_SIZE` 廃止 → `FONT_LANE_RATIO`）（3 節）。実機で lanes 2/8/16 のフォント変化を確認。
+- [x] `debug_background` 設定化（デフォルト透過）（4 節）。
+- [x] 各ステップ後 `cargo build`。実機で透過・レーン可変・背景設定・フォント連動を視認確認済み。
+- 補足: `screen` 引数は受け取るのみで未配線（socket 切替はフェーズ3）。`libc`/`toml` は `cargo add`（最新解決）で追加。
 
 ### フェーズ 2: serve 側の振る舞い拡張
 
