@@ -4,25 +4,18 @@
 
 ## 前提条件
 
-実行する環境が満たすべき条件:
+- **macOS (Apple Silicon / arm64)**
 
-- **macOS**
-- ビルドする場合は **Rust ツールチェイン**（`rustup` 経由の stable）と Xcode Command Line Tools（`xcode-select --install`）
+ビルド済みバイナリを使う場合、これ以外の前提は不要。ソースからビルドする場合の前提は[後述](#ソースからビルドする場合)。
 
 ## インストール
 
-現状 macOS 版のビルド済みバイナリ配布は無いため、ソースからビルドする。
+ビルド済みバイナリ (Apple Silicon / arm64) を GitHub Releases から取得する。
 
 ```
-git clone https://github.com/high-u/danmaku.git
-cd danmaku/apps/danmaku-gui-macos
-cargo build --release
-```
-
-成果物は `target/release/danmaku`。`PATH` の通った場所に置く:
-
-```
-mkdir -p ~/.local/bin && cp target/release/danmaku ~/.local/bin/
+curl -L -o danmaku https://github.com/high-u/danmaku/releases/latest/download/danmaku-macos-aarch64
+chmod +x danmaku
+mkdir -p ~/.local/bin && mv danmaku ~/.local/bin/
 ```
 
 `~/.local/bin` が `PATH` に含まれていること。確認:
@@ -30,6 +23,22 @@ mkdir -p ~/.local/bin && cp target/release/danmaku ~/.local/bin/
 ```
 which danmaku
 ```
+
+> **補足**: バイナリは未署名だが、上記のように `curl` で取得した場合は Gatekeeper の
+> 隔離属性が付かないためそのまま実行できる。ブラウザ経由でダウンロードした場合は
+> `xattr -d com.apple.quarantine danmaku` で隔離を外す必要がある。
+
+### ソースからビルドする場合
+
+```
+git clone https://github.com/high-u/danmaku.git
+cd danmaku
+cargo build --release --manifest-path apps/danmaku-gui-macos/Cargo.toml
+mkdir -p ~/.local/bin && cp apps/danmaku-gui-macos/target/release/danmaku ~/.local/bin/
+```
+
+ビルドには Rust ツールチェイン (`rustup` 経由の stable) と Xcode Command Line Tools
+(`xcode-select --install`) が必要。
 
 ## 実行例
 
