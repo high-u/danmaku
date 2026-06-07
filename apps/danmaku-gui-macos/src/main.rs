@@ -12,11 +12,13 @@
 use std::cell::RefCell;
 use std::io::Write;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::process::CommandExt; // PoC: setsid 自己再起動
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command as ProcCommand, ExitCode, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::{Duration, Instant}; // PoC: wait_for_socket
 
 use block2::RcBlock;
 use clap::{Parser, Subcommand};
@@ -136,9 +138,20 @@ fn run_send(payload: Payload) -> ExitCode {
     let path = socket_path();
     let mut stream = match UnixStream::connect(&path) {
         Ok(s) => s,
-        Err(e) => {
-            eprintln!("danmaku-gui: failed to connect to {}: {e}", path.display());
-            return ExitCode::FAILURE;
+        Err(_) => {
+            // PoC: serve 未起動なら自分自身を切り離して起動し、socket を待つ。
+            eprintln!("danmaku-gui: serve not running, spawning (PoC)…");
+            if let Err(e) = spawn_serve() {
+                eprintln!("danmaku-gui: failed to spawn serve: {e}");
+                return ExitCode::FAILURE;
+            }
+            match wait_for_socket(&path, Duration::from_secs(5)) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("danmaku-gui: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
         }
     };
     if let Err(e) = stream.write_all(line.as_bytes()) {
@@ -146,6 +159,46 @@ fn run_send(payload: Payload) -> ExitCode {
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
+}
+
+// PoC: 自分自身を `serve` として、親から切り離した新セッションで起動する。
+// （Linux 版 spawn_serve の setsid 方式が macOS でも通用するかの検証用）
+fn spawn_serve() -> std::io::Result<()> {
+    let exe = std::env::current_exe()?;
+    let mut cmd = ProcCommand::new(exe);
+    cmd.arg("serve")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn()?;
+    Ok(())
+}
+
+// PoC: serve 起動直後の socket が listen 可能になるまで接続を試行する。
+fn wait_for_socket(path: &Path, timeout: Duration) -> Result<UnixStream, String> {
+    let start = Instant::now();
+    loop {
+        match UnixStream::connect(path) {
+            Ok(s) => return Ok(s),
+            Err(_) => {
+                if start.elapsed() >= timeout {
+                    return Err(format!(
+                        "serve did not become ready within {}s",
+                        timeout.as_secs()
+                    ));
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -182,6 +235,18 @@ fn run_serve() -> ExitCode {
 
     let app = NSApplication::sharedApplication(mtm);
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
+
+    // socket listener を別スレッドで起動。
+    // パネルを作る前に socket を確保することで、二重起動の負け側が UI を出さずに即終了できる。
+    let (tx, rx) = mpsc::channel::<Payload>();
+    let socket_path_buf = socket_path();
+    match start_listener(socket_path_buf.clone(), tx) {
+        Ok(()) => eprintln!("danmaku-gui: listening on {}", socket_path_buf.display()),
+        Err(e) => {
+            eprintln!("danmaku-gui: failed to start listener: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
 
     let screen = match NSScreen::mainScreen(mtm) {
         Some(s) => s,
@@ -244,17 +309,6 @@ fn run_serve() -> ExitCode {
     };
 
     panel.orderFrontRegardless();
-
-    // socket listener を別スレッドで起動
-    let (tx, rx) = mpsc::channel::<Payload>();
-    let socket_path_buf = socket_path();
-    match start_listener(socket_path_buf.clone(), tx) {
-        Ok(()) => eprintln!("danmaku-gui: listening on {}", socket_path_buf.display()),
-        Err(e) => {
-            eprintln!("danmaku-gui: failed to start listener: {e}");
-            return ExitCode::FAILURE;
-        }
-    }
 
     // メインスレッドの状態
     let state = Rc::new(RefCell::new(DanmakuState::new()));
