@@ -50,6 +50,7 @@ const SPAWN_GAP_SEC: f64 = 1.5; // 同レーンの最小再使用間隔
 const PAYLOAD_STAGGER_MAX_SEC: f64 = 0.25; // 同一ペイロード内のずらし最大値
 const FONT_LANE_RATIO: f64 = 0.6; // フォント絶対高 / レーン高
 const TICK_INTERVAL_SEC: f64 = 0.1; // メインスレッド側のポーリング周期
+const IDLE_CHECK_INTERVAL_SEC: f64 = 30.0; // アイドル判定専用タイマーの周期
 
 // ============================================================================
 // CLI
@@ -249,6 +250,7 @@ struct DanmakuState {
     lanes: usize,
     bullets: Vec<Bullet>,
     last_spawn_at: Vec<Option<f64>>, // length == lanes
+    last_activity: f64,              // 最後に弾幕を受信した時刻 (CACurrentMediaTime 基準)
 }
 
 impl DanmakuState {
@@ -257,6 +259,7 @@ impl DanmakuState {
             lanes,
             bullets: Vec::new(),
             last_spawn_at: vec![None; lanes],
+            last_activity: unsafe { CACurrentMediaTime() },
         }
     }
 }
@@ -362,7 +365,7 @@ fn run_serve() -> ExitCode {
 
     // NSTimer で channel を drain + 期限切れ弾 cleanup
     schedule_tick(
-        state,
+        Rc::clone(&state),
         root_layer,
         rx,
         content_size,
@@ -370,6 +373,14 @@ fn run_serve() -> ExitCode {
         font,
         font_size,
     );
+
+    // アイドル自動終了は専用タイマーに分離する。
+    // 「タイマー機構（周期・ライフサイクル）」と「アイドル検出（ドメイン判定）」は別責務であり、
+    // 描画/ドレインの tick に相乗りさせない (tick は活動がある時に回るもの、検出は活動が無いことを見るもの)。
+    // idle_timeout_min == 0 のときはタイマーを作らない = 「自動終了しない」を構造で表現する。
+    if config.idle_timeout_min > 0 {
+        schedule_idle_check(state, config.idle_timeout_min);
+    }
 
     eprintln!(
         "danmaku: serving ({}x{})",
@@ -394,6 +405,7 @@ fn schedule_tick(
         // 受信した全ペイロードを drain
         while let Ok(payload) = rx.try_recv() {
             let mut st = state.borrow_mut();
+            st.last_activity = unsafe { CACurrentMediaTime() };
             spawn_messages(
                 &payload.messages,
                 &mut st,
@@ -418,6 +430,28 @@ fn schedule_tick(
     });
     unsafe {
         NSTimer::scheduledTimerWithTimeInterval_repeats_block(TICK_INTERVAL_SEC, true, &block);
+    }
+}
+
+// アイドル自動終了専用タイマー。
+// last_activity から idle_timeout_min 分を過ぎていたらプロセスを終了する。
+// 周期 (IDLE_CHECK_INTERVAL_SEC) もライフサイクルもこのタイマー自身が所有し、tick には依存しない。
+fn schedule_idle_check(state: Rc<RefCell<DanmakuState>>, idle_timeout_min: u64) {
+    let timeout_sec = idle_timeout_min as f64 * 60.0;
+    let block = RcBlock::new(move |_timer: std::ptr::NonNull<NSTimer>| {
+        let now = unsafe { CACurrentMediaTime() };
+        let last = state.borrow().last_activity;
+        if now - last >= timeout_sec {
+            eprintln!("danmaku: idle for {idle_timeout_min} min, shutting down");
+            std::process::exit(0);
+        }
+    });
+    unsafe {
+        NSTimer::scheduledTimerWithTimeInterval_repeats_block(
+            IDLE_CHECK_INTERVAL_SEC,
+            true,
+            &block,
+        );
     }
 }
 
