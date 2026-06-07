@@ -6,9 +6,11 @@
 
 ## 前提
 
-- `getscreens` がインストール済み（`which getscreens`）
 - `danmaku` がインストール済み（`which danmaku`）。serve は `danmaku send` が未起動時に自動起動するので、事前起動は不要
 - `qwen` がインストール済み（`which qwen`）
+- スクショ取得に OS 標準コマンドを使う（自作の `getscreens` は不要）:
+  - **macOS**: `screencapture`（標準搭載）。**画面収録の権限**が必要 — システム設定 → プライバシーとセキュリティ → 画面収録 で、スクリプトを起動する端末アプリ（Terminal / iTerm / VS Code 等）を許可する。未許可だとエラーにならず**真っ黒な画像**が撮れる
+  - **Linux (X11)**: `maim` と `xrandr`（`which maim` / `which xrandr`）
 
 ## 使い方
 
@@ -20,6 +22,7 @@ python3 danmaku-loop.py --interval 10 --count 6
 |---|---|---|
 | `--interval` | ターン間隔（秒） | 10 |
 | `--count` | 実行ターン数。0 で Ctrl-C まで無限 | 0 |
+| `--screen` | 撮影する画面番号（0 始まり、`danmaku --screen` と同番号体系）。今はメイン相当のみ | 0 |
 | `--base-url` | qwen の `--openai-base-url` に渡す値 | （config.toml を使用） |
 | `--model` | qwen の `-m` に渡すモデル名 | （config.toml を使用） |
 | `--api-key` | qwen の `--openai-api-key` に渡す値 | （config.toml を使用） |
@@ -27,7 +30,7 @@ python3 danmaku-loop.py --interval 10 --count 6
 各ターンの流れ:
 
 1. スクショ保存先フォルダを空にする
-2. `getscreens` でスクショを撮り、PNG パスを得る
+2. OS 標準コマンド（macOS: `screencapture` / Linux: `maim`+`xrandr`）でメイン画面を撮り、PNG パスを得る
 3. `qwen` を 1 回呼ぶ（プロンプト先頭に `@<path>` を付けて画像を添付）。コメント生成と `danmaku send` の実行は qwen 側が行う
 4. `--interval` 秒待つ
 
