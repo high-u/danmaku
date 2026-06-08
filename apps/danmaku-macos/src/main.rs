@@ -46,7 +46,7 @@ const MAX_LANES: u32 = 128;
 const BASE_SPEED: f64 = 250.0; // px/sec
 const SPEED_JITTER: f64 = 0.3; // ±30%
 const SPAWN_GAP_SEC: f64 = 1.5; // 同レーンの最小再使用間隔
-const PAYLOAD_STAGGER_MAX_SEC: f64 = 0.25; // 同一ペイロード内のずらし最大値
+const STAGGER_INTERVAL_SEC: f64 = 0.25; // 同一ペイロード内を等間隔 (250ms) でずらす
 const FONT_LANE_RATIO: f64 = 0.6; // フォント絶対高 / レーン高
 const TICK_INTERVAL_SEC: f64 = 0.1; // メインスレッド側のポーリング周期
 const IDLE_CHECK_INTERVAL_SEC: f64 = 30.0; // アイドル判定専用タイマーの周期
@@ -491,6 +491,12 @@ fn handle_connection(stream: UnixStream, tx: mpsc::Sender<Payload>) {
         };
         match serde_json::from_str::<Payload>(&line) {
             Ok(payload) => {
+                // CLI 入口 (clap の required=true) と対等に、socket 入口でも空 messages を弾く。
+                // これにより spawn_messages 側は len() >= 1 を前提にできる。
+                if payload.messages.is_empty() {
+                    eprintln!("danmaku: empty messages, ignoring; line={line:?}");
+                    continue;
+                }
                 if tx.send(payload).is_err() {
                     return; // メイン側が落ちている
                 }
@@ -537,7 +543,7 @@ fn spawn_messages(
     let mut rng = rand::rng();
     let lanes = state.lanes;
     let now = unsafe { CACurrentMediaTime() };
-    for msg in messages {
+    for (i, msg) in messages.iter().enumerate() {
         let free: Vec<usize> = (0..lanes)
             .filter(|&i| {
                 state.last_spawn_at[i]
@@ -554,7 +560,8 @@ fn spawn_messages(
         };
         let speed_factor = 1.0 + rng.random_range(-SPEED_JITTER..SPEED_JITTER);
         let speed = BASE_SPEED * speed_factor;
-        let stagger = rng.random_range(0.0..PAYLOAD_STAGGER_MAX_SEC);
+        // 等間隔: i 番目を i × STAGGER_INTERVAL_SEC ずらす。ランダムと違い必ず階段状に分散する。
+        let stagger = i as f64 * STAGGER_INTERVAL_SEC;
         let begin_time = now + stagger;
         state.last_spawn_at[lane] = Some(begin_time);
 
