@@ -54,3 +54,28 @@ api_key = "sk-..."
 ## プロンプト `prompt.md`
 
 弾幕の指示文は `prompt.md` を編集すれば差し替えられる。スクリプトが先頭に `@<画像パス>` を付けて qwen に渡すので、本文に画像パスを書く必要はない。
+
+## 派生スクリプト
+
+同じループの実装違いが並んでいる。プロンプト（`prompt.md`）と `config.toml` の `interval` / `count` / `screen` は共通。
+
+| スクリプト | コメント生成の担い手 | 接続先の指定 |
+|---|---|---|
+| `danmaku-loop-cline.py` | cline (エージェント) | `config.toml` の `base_url` / `api_key` / `model` |
+| `danmaku-loop-openai.py` | OpenAI 互換 API を直接叩く | 同上 |
+| `danmaku-loop-pi.py` | pi (エージェント) | `pi-agent/models.json`（接続先）+ `config.toml` の `model` |
+
+### `danmaku-loop-pi.py`（pi 版）
+
+cline 版と同じくエージェント（[pi](https://github.com/earendil-works/pi)）に画像を渡し、`bash` ツールで `danmaku send` を実行させる。違いは接続先の指定方法だけ:
+
+- `pi` がインストール済み（`which pi`）。
+- pi は base URL を実行毎フラグで受け取れないため、接続先は同階層 `pi-agent/models.json` にプロバイダとして定義しておく（起動時生成はしない）。スクリプトは `PI_CODING_AGENT_DIR` をこの `pi-agent` に向けて pi に読ませる。LM Studio を例にした雛形を同梱済み。
+- `config.toml` の `model` は `models.json` の `id` と一致させる。`base_url` / `api_key` は `models.json` 側が持つ。
+- 接続確認: `PI_CODING_AGENT_DIR="$PWD/pi-agent" pi --list-models` でモデルが出れば設定 OK。
+
+```sh
+python3 danmaku-loop-pi.py --interval 5 --count 20
+```
+
+`models.json` のプロバイダを変えたいときは `--provider`（既定 `lmstudio`）でも上書きできる。
