@@ -26,10 +26,10 @@ use objc2::{MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSBackingStoreType, NSColor, NSFont,
     NSFontAttributeName, NSPanel, NSScreen, NSScreenSaverWindowLevel, NSStringDrawing,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSWindowCollectionBehavior, NSWindowSharingType, NSWindowStyleMask,
 };
-use objc2_core_foundation::CFType;
 use objc2_foundation::{NSDictionary, NSNumber, NSPoint, NSRect, NSSize, NSString, NSTimer};
+use objc2_core_foundation::CFType;
 use objc2_quartz_core::{CABasicAnimation, CALayer, CAMediaTiming, CATextLayer};
 use rand::seq::IndexedRandom;
 use rand::RngExt;
@@ -105,6 +105,8 @@ struct Config {
     idle_timeout_min: u64,
     /// 領域確認用の薄い背景色を表示する (開発用)。
     debug_background: bool,
+    /// 弾幕ウィンドウをスクショ・画面録画・画面共有から除外する。
+    exclude_from_capture: bool,
 }
 
 impl Default for Config {
@@ -113,6 +115,7 @@ impl Default for Config {
             lanes: DEFAULT_LANES as u32,
             idle_timeout_min: DEFAULT_IDLE_TIMEOUT_MIN,
             debug_background: false,
+            exclude_from_capture: true,
         }
     }
 }
@@ -336,6 +339,10 @@ fn run_serve(screen: u32) -> ExitCode {
     panel.setHasShadow(false);
     panel.setIgnoresMouseEvents(true);
     panel.setHidesOnDeactivate(false);
+    // 画面には表示しつつ、スクリーンショット・画面録画・画面共有からは除外する
+    if config.exclude_from_capture {
+        panel.setSharingType(NSWindowSharingType::None);
+    }
 
     let bg = if config.debug_background {
         let (r, g, b, a) = BACKGROUND_TINT;
@@ -611,6 +618,14 @@ fn create_bullet_layer(
     }
     text_layer.setFontSize(font_size);
     text_layer.setForegroundColor(Some(&NSColor::whiteColor().CGColor()));
+    // 文字にドロップシャドウを付けて背景に対する視認性を上げる
+    text_layer.setShadowColor(Some(&NSColor::blackColor().CGColor()));
+    text_layer.setShadowOpacity(1.0); // 影の濃さ (0.0〜1.0)
+    text_layer.setShadowRadius(1.0); // 影のぼかし半径 (px、大きいほどソフト)
+    text_layer.setShadowOffset(NSSize {
+        width: 0.0, // 影の横ズレ (+で右)
+        height: 0.0, // 影の縦ズレ (-で下)
+    });
     text_layer.setContentsScale(contents_scale);
     text_layer.setBounds(NSRect {
         origin: NSPoint { x: 0.0, y: 0.0 },
