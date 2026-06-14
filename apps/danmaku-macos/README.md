@@ -66,12 +66,17 @@ danmaku send --screen 1 "別の画面に出す"
 挙動は `~/.config/danmaku/config.toml` で変更できる（無ければすべてデフォルト）。
 
 ```toml
-lanes = 16              # 弾幕のレーン数 (1-128)。デフォルト 16
-idle_timeout_min = 30   # 最終弾幕からこの分数で自動終了。0 で無効。デフォルト 30
-debug_background = false # 表示領域確認用の薄い背景 (開発用)。デフォルト false
+lanes = 16                  # 弾幕のレーン数 (1-128)。デフォルト 16
+idle_timeout_min = 30       # 最終弾幕からこの分数で自動終了。0 で無効。デフォルト 30
+debug_background = false    # 表示領域確認用の薄い背景 (開発用)。デフォルト false
+exclude_from_capture = true # 弾幕をスクショ・画面録画・画面共有から除外。デフォルト true
 ```
 
 設定は serve の起動時に読まれる。
+
+> **`exclude_from_capture` について**: デフォルト `true` では、弾幕ウィンドウは自分の画面には
+> 見えるが、スクリーンショット・画面録画・オンライン会議の画面共有には**写らない**。
+> 弾幕も含めて録画・共有したい場合は `false` にする。
 
 ## 設計の詳細
 
