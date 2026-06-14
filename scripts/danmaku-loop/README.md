@@ -14,12 +14,12 @@
 
 ## 使い方
 
-```
+```sh
 python3 danmaku-loop.py --interval 10 --count 6
 ```
 
 | 引数 | 意味 | デフォルト |
-|---|---|---|
+| --- | --- | --- |
 | `--interval` | ターン間隔（秒） | 10 |
 | `--count` | 実行ターン数。0 で Ctrl-C まで無限 | 0 |
 | `--screen` | 撮影する画面番号（0 始まり、`danmaku --screen` と同番号体系）。今はメイン相当のみ | 0 |
@@ -54,3 +54,48 @@ api_key = "sk-..."
 ## プロンプト `prompt.md`
 
 弾幕の指示文は `prompt.md` を編集すれば差し替えられる。スクリプトが先頭に `@<画像パス>` を付けて qwen に渡すので、本文に画像パスを書く必要はない。
+
+## 派生スクリプト
+
+同じループの実装違いが並んでいる。プロンプト（`prompt.md`）と `config.toml` の `interval` / `count` / `screen` は共通。
+
+| スクリプト | コメント生成の担い手 | 接続先の指定 |
+| --- | --- | --- |
+| `danmaku-loop-cline.py` | cline (エージェント) | `config.toml` の `base_url` / `api_key` / `model` |
+| `danmaku-loop-openai.py` | OpenAI 互換 API を直接叩く | 同上 |
+| `danmaku-loop-pi.py` | pi (エージェント) | `pi-agent/models.json`（接続先）+ `config.toml` の `model` |
+
+### `danmaku-loop-pi.py`（pi 版）
+
+cline 版と同じくエージェント（[pi](https://github.com/earendil-works/pi)）に画像を渡し、`bash` ツールで `danmaku send` を実行させる。違いは接続先の指定方法だけ:
+
+- `pi` がインストール済み（`which pi`）。
+- pi は base URL を実行毎フラグで受け取れないため、接続先は同階層 `pi-agent/models.json` にプロバイダとして定義しておく（起動時生成はしない）。スクリプトは `PI_CODING_AGENT_DIR` をこの `pi-agent` に向けて pi に読ませる。LM Studio を例にした雛形を同梱済み。
+- `config.toml` の `model` は `models.json` の `id` と一致させる。`base_url` / `api_key` は `models.json` 側が持つ。
+- 接続確認: `PI_CODING_AGENT_DIR="$PWD/pi-agent" pi --list-models` でモデルが出れば設定 OK。
+
+```sh
+python3 danmaku-loop-pi.py --interval 5 --count 20
+```
+
+`models.json` のプロバイダを変えたいときは `--provider`（既定 `lmstudio`）でも上書きできる。
+
+> **コラム: なぜ pi 版は cline 版より弾幕表示が速いのか**
+>
+> ローカルモデル（LM Studio + gemma-4-12b など）では、最初のトークンが出るまでの時間はほぼ
+> 入力の prefill 時間に比例し、それは「モデルに送られる入力トークン数」で決まる。同条件
+> （同モデル・同プロンプト・プロキシで実測）で各ハーネスが 1 リクエストに送る量を比べると:
+>
+> | ハーネス | システムプロンプト | ツール定義 | 総入力 |
+> | --- | --- | --- | --- |
+> | pi | 約 1.6KB（~400 tok） | ネイティブ tool schema 約 0.6KB（~145 tok） | **~590 tok** |
+> | cline | 約 45KB（**~11,400 tok**） | なし（本文に内包） | **~11,900 tok** |
+>
+> cline はツールの使い方・ルール・例・TODO リスト指示などを全部システムプロンプト本文に
+> 詰め込み、OpenAI のネイティブ function-calling を使わず XML 風の出力をパースする方式。
+> このため毎ターン約 45KB を送る。pi はツール定義を `tools` フィールドに分離し本文を簡素に
+> 保つので、入力は約 1/20。弾幕のように「軽い 1 ショットを高頻度で回す」用途では、この差が
+> そのまま「最初の弾幕までの待ち時間」の差になる。
+>
+> pi 版で `--tools bash --no-extensions --no-skills --no-prompt-templates` と絞っているのも
+> 余計なツール/拡張のスキーマを足さないためだが、支配的なのは cline 固有の巨大プロンプトの方。
