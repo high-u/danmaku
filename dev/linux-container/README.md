@@ -1,7 +1,6 @@
 # danmaku-linux 開発コンテナ (macOS 上)
 
-macOS 上の Docker で Ubuntu + XFCE デスクトップを動かし、VNC 越しに `danmaku-linux`
-の透過オーバーレイ / クリックスルーの挙動を確認するための環境。
+macOS 上の Docker で Ubuntu + XFCE デスクトップを動かし、VNC 越しに `danmaku-linux` の透過オーバーレイ / クリックスルーの挙動を確認するための環境。
 
 ```text
 Ubuntu container
@@ -9,8 +8,7 @@ Ubuntu container
 Mac → 画面共有.app で vnc://localhost:5901
 ```
 
-- `danmaku-linux` は GTK4 + X11 依存。実 X ディスプレイと合成器が要るため、XFCE の
-  デスクトップ環境上で動かす。
+- `danmaku-linux` は GTK4 + X11 依存。実 X ディスプレイと合成器が要るため、XFCE のデスクトップ環境上で動かす。
 - VNC を使うのは macOS 標準の「画面共有」がそのまま VNC クライアントになるため。
 
 ## 前提
@@ -41,12 +39,9 @@ vnc://localhost:5901
 
 ## 開発のしかた
 
-ビルドと実行 (`cargo` / `danmaku`) は必ずコンテナ内で動く (Linux/X11 依存のため)。
-編集とコマンド発行は macOS 側からでも、コンテナ内からでも、どちらでもよい。
-弾幕を見るのは常に「画面共有」の窓。
+ビルドと実行 (`cargo` / `danmaku`) は必ずコンテナ内で動く (Linux/X11 依存のため)。編集とコマンド発行は macOS 側からでも、コンテナ内からでも、どちらでもよい。弾幕を見るのは常に「画面共有」の窓。
 
-`serve` が常駐 (透過オーバーレイ)、`send` がそこへメッセージを送る。
-コードを変えたら `serve` を再起動して反映する。
+`serve` が常駐 (透過オーバーレイ)、`send` がそこへメッセージを送る。コードを変えたら `serve` を再起動して反映する。
 
 ### A. macOS 側の端末から操作する
 
@@ -104,9 +99,7 @@ danmaku serve &
 danmaku send "ハロー" "テスト"
 ```
 
-ソースを変えたら `cargo install --path apps/danmaku-linux` をやり直すと `danmaku` が
-更新される。`cargo install` で入れた `danmaku` はコンテナを作り直すと消えるので、再度
-install する。
+ソースを変えたら `cargo install --path apps/danmaku-linux` をやり直すと `danmaku` が更新される。`cargo install` で入れた `danmaku` はコンテナを作り直すと消えるので、再度 install する。
 
 ## 後始末
 
@@ -119,9 +112,6 @@ docker compose -f dev/linux-container/compose.yaml down
 
 ## 補足 / 制限
 
-- VNC パスワードは固定値 `danmaku`。localhost publish 前提の開発用。外部公開しないこと。
-  変更するには compose の環境変数 `VNC_PASSWORD` を設定する。
-- XFCE は Ubuntu 標準の GNOME とは別のデスクトップ環境。パネルやウィンドウ管理まわりの
-  挙動は GNOME と一致しない。
-- `XDG_RUNTIME_DIR` はイメージ内で `/tmp/runtime-root` に設定済み
-  (`danmaku-<screen>.sock` の置き場所)。
+- VNC パスワードは固定値 `danmaku`。localhost publish 前提の開発用。外部公開しないこと。変更するには compose の環境変数 `VNC_PASSWORD` を設定する。
+- XFCE は Ubuntu 標準の GNOME とは別のデスクトップ環境。パネルやウィンドウ管理まわりの挙動は GNOME と一致しない。
+- `XDG_RUNTIME_DIR` はイメージ内で `/tmp/runtime-root` に設定済み (`danmaku-<screen>.sock` の置き場所)。
