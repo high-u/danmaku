@@ -111,8 +111,8 @@ pub(crate) fn move_window_to(surface: &gdk::Surface, x: i32, y: i32) {
 }
 
 /// gdk Surface から xlib の Display ポインタとウィンドウ ID を取り出す。
-/// X11 機構の内部実装詳細。他の X11 手続き (モニタ配置等) からも使う。
-pub(crate) fn x11_handles(
+/// X11 機構の内部実装詳細。このモジュール内の各手続きからのみ使う。
+fn x11_handles(
     surface: &gdk::Surface,
 ) -> Option<(*mut x11::xlib::Display, x11::xlib::Window)> {
     use gdk4_x11::X11Display;

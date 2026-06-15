@@ -178,8 +178,13 @@ realize 時に XChangeProperty でまとめて設定している。だが実際�
 
 ## Phase 5: 中核の最終点検
 
-- Phase 1〜4 の結果、FFI/生 xlib の詳細が中核から消え置き場の内部に隔離され、
-  中核 `build_ui` が意図だけで読める状態になったかを点検（合格条件）。
+- 点検結果: main.rs に X11/FFI 直参照は**ゼロ**。realize/map は
+  `make_click_through` / `declare_overlay_states` / `reassert_overlay_states` /
+  `move_to_monitor_center` と意図名だけで読める。合格。
+- 整理1点: `overlay_x11::x11_handles` が Phase 1 の名残で `pub(crate)` だったが、
+  今は同モジュール内からのみ使用。**private `fn` に絞り**、公開面を意図 API
+  3 つ（declare/reassert/move_window_to）だけにした。
+- 可視性のみの変更で実行時挙動は不変。ビルド成功（lint 警告なし）で確認。
 
 ## Phase 6: 命名・コメント・ドキュメント整頓
 
@@ -201,9 +206,9 @@ realize 時に XChangeProperty でまとめて設定している。だが実際�
 | クリックスルー | `surface.set_input_region(空)` | GDK(中) | GDK の抽象は X11 に閉じない。意図（クリックスルー）として表に出す候補 | 301-306 | **GDK 維持**。realize 内のベタ書き2行を中核の意図関数 `make_click_through(surface)` へ切り出し。X11 専用でないため `overlay_x11` には入れず中核に置く | GTK4 に真のクリックスルー上位 API は無い（`set_can_target` はアプリ内イベント配送制御で別ウィンドウへ素通りしない。確認済み）。`set_input_region(空)` が X11/Wayland 双方で通る最も高い適切なレイヤー。実機検証 3/3: クリックスルー(xdotool)・配置・4状態すべて不変 |
 | 最前面・全WS・タスクバー/ページャ非表示 | 生 xlib で `_NET_WM_STATE` 設定 | xlib(低) | 最も低水準で中核に露出。意図として宣言し、EWMH 手続きは backend 側へ隔離する候補。**なぜ GTK/GDK でなく生 xlib なのかを先に確認**（対応API不在/不発の経緯がある可能性） | 305, 556-580 | **生 xlib 維持**。`overlay_x11::declare_overlay_states` へ隔離。中核は realize でこれを呼ぶだけ。realize 時に 4 状態を property 設定 | GTK4 が `set_keep_above`/`set_skip_taskbar_hint`/`set_skip_pager_hint`/`stick` を削除、GDK4 `ToplevelState` は read-only で要求 setter 無し（実在確認済み）。高レイヤー手段が存在しないため決定基準により生 xlib が正当 |
 | 最前面の再通知 | 生 xlib で EWMH クライアントメッセージ | xlib(低) | 同上。**map 後に再通知している理由（初期設定だけでは不発だった経緯）を確認**してから隔離 | 308-312, 582-600 | **生 xlib 維持**。`overlay_x11::reassert_overlay_states` へ隔離。**案X: ABOVE だけでなく 4 状態すべて再送**（宣言＝実装に揃える） | Phase 0 で「realize の property 設定は map 時に Mutter にリセットされ、ABOVE のみ ClientMessage 再送で生存。他 3 状態は喪失」と判明。4 状態すべて再送することで全意図が実際に効く（検証: `_NET_WM_STATE` に 4 状態・`_NET_WM_DESKTOP=0xFFFFFFFF`。配置/クリックスルーは不変） |
-| X11 ハンドル取得 (再掲) | `x11_handles` | GDK/FFI | backend 内部へ | 540-555 | `overlay_x11::x11_handles` へ移設（pub(crate)、機構の内部詳細）。`atom` も同モジュールへ | 中核から FFI 詳細を排除。モニタ配置(Phase 2)も同じ基盤を使うため共有 |
+| X11 ハンドル取得 (再掲) | `x11_handles` | GDK/FFI | backend 内部へ | 540-555 | `overlay_x11::x11_handles` へ移設。`atom` も同モジュールへ。Phase 5 で `pub(crate)`→private に絞り、公開面は意図 API 3 つだけに | 中核から FFI 詳細を排除。内部詳細はモジュール内に閉じる |
 | 指定モニタ中央へ配置 | 生 xlib `XMoveWindow`(xid 直接) | xlib(低) | GTK/GDK にモニタ指定配置の手段が乏しく直叩きになっている可能性。意図（指定モニタへ配置）として宣言する候補。Wayland では自己配置不可という制約に留意 | 308-312, 630-640 | **生 xlib 維持**。機構 `XMoveWindow` を `overlay_x11::move_window_to(surface,x,y)` へ隔離。「どこに置くか」(モニタ幾何→中央計算) はアプリ論理として中核 `move_to_monitor_center` に残す | GTK4/GDK4 に任意座標配置 API が無い（実在確認: `GtkWindow` は `fullscreen_on_monitor` のみ、`GdkToplevel` も任意 x,y 不可。Wayland 自己配置不可のため）。決定基準により生 xlib が正当。実機検証 3/3 正常 |
-| X11 ハンドル取得 | `X11Surface`/`X11Display` downcast、`gdk_x11_surface_get_xid` | GDK/FFI | backend 内部の実装詳細として隔離する候補 | 540-555 | _未_ | _未_ |
+| X11 ハンドル取得 | `X11Surface`/`X11Display` downcast、`gdk_x11_surface_get_xid` | GDK/FFI | backend 内部の実装詳細として隔離する候補 | 540-555 | **`overlay_x11` 内の private `fn x11_handles` として隔離**。中核からは不可視 | 中核 build_ui に FFI 詳細が一切出ない状態を達成。点検で main.rs に X11/FFI 直参照ゼロを確認 |
 
 ---
 
