@@ -302,8 +302,7 @@ fn build_ui(
 
     window.connect_realize(|win| {
         let Some(surface) = win.surface() else { return };
-        let region = cairo::Region::create();
-        surface.set_input_region(Some(&region));
+        make_click_through(&surface);
         overlay_x11::declare_overlay_states(&surface);
     });
 
@@ -537,6 +536,16 @@ fn process_line(line: &str, state: &Rc<RefCell<DanmakuState>>) {
     let mut st = state.borrow_mut();
     spawn_messages(&mut st, &payload.messages);
     st.last_activity = Instant::now();
+}
+
+// ウィンドウをクリックスルー (入力を背後のウィンドウへ素通り) にする。
+// 入力領域を空に設定する GDK の手段。X11/Wayland 双方で WM・コンポジタが
+// 入力を背後へ流す。GTK4 に「クリックスルー」を表す上位 API は無く
+// (`set_can_target` はアプリ内のイベント配送制御で、別ウィンドウへの素通りは
+// しない。確認済み)、GDK の入力領域指定が最も高い適切なレイヤー。
+fn make_click_through(surface: &gdk::Surface) {
+    let empty = cairo::Region::create();
+    surface.set_input_region(Some(&empty));
 }
 
 // 指定された screen 番号 (gdk::Display::monitors() のインデックス) のモニタを取得する。
