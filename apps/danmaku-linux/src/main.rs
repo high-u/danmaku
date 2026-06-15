@@ -549,9 +549,6 @@ fn monitor_for_screen(screen: u32) -> Option<gdk::Monitor> {
 
 // マップ後にウィンドウをモニタ中央 (縦方向) へ移動する。
 fn move_to_monitor_center(surface: &gdk::Surface, screen: u32) {
-    let Some((xdisplay, xid)) = overlay_x11::x11_handles(surface) else {
-        return;
-    };
     let Some(monitor) = monitor_for_screen(screen) else {
         return;
     };
@@ -559,7 +556,5 @@ fn move_to_monitor_center(surface: &gdk::Surface, screen: u32) {
     let h = (geom.height() as f64 * 0.75) as i32;
     let x = geom.x();
     let y = geom.y() + (geom.height() - h) / 2;
-    unsafe {
-        x11::xlib::XMoveWindow(xdisplay, xid, x, y);
-    }
+    overlay_x11::move_window_to(surface, x, y);
 }

@@ -94,6 +94,22 @@ pub(crate) fn reassert_overlay_states(surface: &gdk::Surface) {
     }
 }
 
+/// ウィンドウを指定座標へ移動する。
+///
+/// GTK4/GDK4 にはクライアントが自分の位置を指定する API が無い
+/// (Wayland では自己配置不可のため。`GtkWindow` のモニタ指定は
+/// `fullscreen_on_monitor` のみで、任意座標への配置はできない。確認済み:
+/// gtk4 0.11)。danmaku は全画面でなく部分サイズのオーバーレイを特定位置へ
+/// 置くため、X11 では `XMoveWindow` を使う。
+pub(crate) fn move_window_to(surface: &gdk::Surface, x: i32, y: i32) {
+    let Some((xdisplay, xid)) = x11_handles(surface) else {
+        return;
+    };
+    unsafe {
+        x11::xlib::XMoveWindow(xdisplay, xid, x, y);
+    }
+}
+
 /// gdk Surface から xlib の Display ポインタとウィンドウ ID を取り出す。
 /// X11 機構の内部実装詳細。他の X11 手続き (モニタ配置等) からも使う。
 pub(crate) fn x11_handles(
