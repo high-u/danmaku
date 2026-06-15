@@ -98,7 +98,6 @@ X11 オーバーレイ実装を、**API の抽象度を揃え、役割をきれ�
 | `XDG_CURRENT_DESKTOP` | `Unity` | だが実体は下記。**DE 名で分岐してはいけない根拠**（高レイヤー実装を支持） |
 | 実 WM (`_NET_WM_NAME`) | `GNOME Shell`（Mutter） | 表示名と実体が食い違う環境がある、という証拠 |
 | セッション名 | `ubuntu`（`DESKTOP_SESSION`/`GDMSESSION`） | |
-| コンポジタ (`_NET_WM_CM_S0`) | **not found** | しかし透過は効いている → 検出手段が的外れか登録形態が違う。**Phase 4 で検証** |
 | モニタ | 1 面（HDMI-A-1, 3840x2160@scale） | |
 
 現状、ユーザー確認で「期待通り動いている」。
@@ -173,11 +172,9 @@ realize 時に XChangeProperty でまとめて設定している。だが実際�
 
 ## Phase 4: 枠なし・透過背景（GTK）
 
-- 対象: `.decorated(false)` (255)、CSS 透過 (259-273)
-- 既に高水準。中核に残すか/意図側へ寄せるかの**役割の置き場所判断**。
-- **Phase 0 の課題を持ち込む**: `_NET_WM_CM_S0` が not found なのに透過は
-  効いている。アプリが「コンポジタが要る」と思い込んでよいか、思い込むなら
-  何を見て判断するのが正しいかを検証する（誤った前提を埋め込まない）。
+- 対象: `.decorated(false)` (257)、CSS 透過 (261-275)
+- 既に GTK 高レイヤーで期待どおり動作。整理すべき癒着なし。**変更不要**。
+- 決定: そのまま中核に残す。コード変更なし。
 
 ## Phase 5: 中核の最終点検
 
@@ -199,8 +196,8 @@ realize 時に XChangeProperty でまとめて設定している。だが実際�
 
 | やりたいこと（意図） | 現状の実装 | 抽象度 | 整理の方向（仮説・要検証） | 該当箇所 | 決定内容 | 理由 |
 |---|---|---|---|---|---|---|
-| 枠なし | `.decorated(false)` | GTK4(高) | 高水準のままで妥当に見える。意図宣言の一部として扱うか、GTK のまま残すかは要検証 | 252-257 | _未_ | _未_ |
-| 透過背景 | CssProvider `background: transparent` | GTK4(高) | GTK レベルで妥当に見える。ただし「コンポジタが要る」という前提を意図として明示したい | 259-273 | _未_ | _未_ |
+| 枠なし | `.decorated(false)` | GTK4(高) | 高水準のままで妥当に見える。意図宣言の一部として扱うか、GTK のまま残すかは要検証 | 257 | **そのまま中核に残す。コード変更なし** | 枠を消す GTK 標準手段で既に高レイヤー。整理すべき癒着なし |
+| 透過背景 | CssProvider `background: transparent` | GTK4(高) | GTK レベルで妥当に見える | 261-275 | **そのまま中核に残す。コード変更なし** | GTK 標準の透過手段で既に高レイヤー・期待どおり動作。整理すべき癒着なし |
 | クリックスルー | `surface.set_input_region(空)` | GDK(中) | GDK の抽象は X11 に閉じない。意図（クリックスルー）として表に出す候補 | 301-306 | **GDK 維持**。realize 内のベタ書き2行を中核の意図関数 `make_click_through(surface)` へ切り出し。X11 専用でないため `overlay_x11` には入れず中核に置く | GTK4 に真のクリックスルー上位 API は無い（`set_can_target` はアプリ内イベント配送制御で別ウィンドウへ素通りしない。確認済み）。`set_input_region(空)` が X11/Wayland 双方で通る最も高い適切なレイヤー。実機検証 3/3: クリックスルー(xdotool)・配置・4状態すべて不変 |
 | 最前面・全WS・タスクバー/ページャ非表示 | 生 xlib で `_NET_WM_STATE` 設定 | xlib(低) | 最も低水準で中核に露出。意図として宣言し、EWMH 手続きは backend 側へ隔離する候補。**なぜ GTK/GDK でなく生 xlib なのかを先に確認**（対応API不在/不発の経緯がある可能性） | 305, 556-580 | **生 xlib 維持**。`overlay_x11::declare_overlay_states` へ隔離。中核は realize でこれを呼ぶだけ。realize 時に 4 状態を property 設定 | GTK4 が `set_keep_above`/`set_skip_taskbar_hint`/`set_skip_pager_hint`/`stick` を削除、GDK4 `ToplevelState` は read-only で要求 setter 無し（実在確認済み）。高レイヤー手段が存在しないため決定基準により生 xlib が正当 |
 | 最前面の再通知 | 生 xlib で EWMH クライアントメッセージ | xlib(低) | 同上。**map 後に再通知している理由（初期設定だけでは不発だった経緯）を確認**してから隔離 | 308-312, 582-600 | **生 xlib 維持**。`overlay_x11::reassert_overlay_states` へ隔離。**案X: ABOVE だけでなく 4 状態すべて再送**（宣言＝実装に揃える） | Phase 0 で「realize の property 設定は map 時に Mutter にリセットされ、ABOVE のみ ClientMessage 再送で生存。他 3 状態は喪失」と判明。4 状態すべて再送することで全意図が実際に効く（検証: `_NET_WM_STATE` に 4 状態・`_NET_WM_DESKTOP=0xFFFFFFFF`。配置/クリックスルーは不変） |
