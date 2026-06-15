@@ -5,7 +5,7 @@ services:
     build:
       # ビルドコンテキストはこのディレクトリ (Dockerfile と entrypoint.sh)。
       context: .
-    image: danmaku-linux-dev
+    image: danmaku-linux-x11-dev
     platform: linux/arm64        # Apple Silicon ネイティブ。x86 エミュは gtk4 ビルドが重い。
     ports:
       - "5901:5901"              # VNC。Mac の「画面共有」から vnc://localhost:5901
@@ -14,7 +14,7 @@ services:
       - ../../:/workspace
       # Mac 側 target と混ざらないよう、ビルド成果物と cargo キャッシュは専用ボリュームへ。
       - danmaku-cargo:/root/.cargo
-      - danmaku-target:/workspace/apps/danmaku-linux/target
+      - danmaku-target:/workspace/apps/linux-x11/target
     # X / 合成器が共有メモリを使う。既定 64m だと大きめ描画で落ちることがある。
     shm_size: "256m"
     stdin_open: true

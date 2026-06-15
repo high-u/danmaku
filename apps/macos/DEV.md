@@ -7,7 +7,7 @@ macOS 上で透過オーバーレイ (serve) と送信 (send) を最短経路で
 ## 1. 送信 (send) で弾幕を流す
 
 ```
-cargo run --release --manifest-path apps/danmaku-macos/Cargo.toml -- send "ハロー" "テスト" "弾幕"
+cargo run --release --manifest-path apps/macos/Cargo.toml -- send "ハロー" "テスト" "弾幕"
 ```
 
 成功時 stdout に `sent 3 message(s) to screen 0` が出て即終了。serve が動いていなければ自動起動され、立ち上がり次第そのまま流れる。serve を直接起動しての確認はしない (実利用は send 経由)。
@@ -15,7 +15,7 @@ cargo run --release --manifest-path apps/danmaku-macos/Cargo.toml -- send "ハ�
 `--screen` を付ける場合は send 側に番号を渡す (0 始まり):
 
 ```
-cargo run --release --manifest-path apps/danmaku-macos/Cargo.toml -- send --screen 1 "..."
+cargo run --release --manifest-path apps/macos/Cargo.toml -- send --screen 1 "..."
 ```
 
 > **フェーズ3b 保留**: `--screen` は socket 分離・serve 自動起動までは反映されるが、描画先モニタの切り替えは未実装で、描画は常にメインディスプレイに出る。
@@ -44,8 +44,8 @@ debug_background = false # 領域確認用の薄い背景色を表示 (開発用
 ## 3. インストール後の確認
 
 ```
-cargo build --release --manifest-path apps/danmaku-macos/Cargo.toml
-cp apps/danmaku-macos/target/release/danmaku ~/.local/bin/
+cargo build --release --manifest-path apps/macos/Cargo.toml
+cp apps/macos/target/release/danmaku ~/.local/bin/
 which danmaku
 danmaku send "確認用コメント"
 ```
@@ -64,21 +64,21 @@ git checkout main && git pull --ff-only
 git tag vX.Y.Z && git push origin vX.Y.Z
 
 # 3. macOS バイナリをリリースビルド (Mac ネイティブ)
-cargo build --release --manifest-path apps/danmaku-macos/Cargo.toml
+cargo build --release --manifest-path apps/macos/Cargo.toml
 
 # 4. 配布アセット名にコピー (リネーム)
-cp apps/danmaku-macos/target/release/danmaku /tmp/danmaku-macos-aarch64
+cp apps/macos/target/release/danmaku /tmp/danmaku-macos-aarch64
 
 # 5. Linux バイナリを用意する
 #    Linux のコードに変更が無い場合は、既存リリースのアセットを流用してよい
 #    (バイナリは自身のバージョンを名乗らないため、版ズレは観測されない)。
-curl -L -o /tmp/danmaku-linux-x86_64 \
-  https://github.com/high-u/danmaku/releases/latest/download/danmaku-linux-x86_64
+curl -L -o /tmp/danmaku-linux-x11-x86_64 \
+  https://github.com/high-u/danmaku/releases/latest/download/danmaku-linux-x11-x86_64
 #    Linux のコードを変更した場合は Linux 環境 (実機 or Mac 上の Linux コンテナ) で
-#    再ビルドする。詳細は apps/danmaku-linux/DEV.md を参照。
+#    再ビルドする。詳細は apps/linux-x11/DEV.md を参照。
 
 # 6. Release を作成して両 OS のアセットを添付
-gh release create vX.Y.Z /tmp/danmaku-macos-aarch64 /tmp/danmaku-linux-x86_64 \
+gh release create vX.Y.Z /tmp/danmaku-macos-aarch64 /tmp/danmaku-linux-x11-x86_64 \
   --title "vX.Y.Z" --notes "..."
 ```
 

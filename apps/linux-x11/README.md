@@ -15,7 +15,7 @@
 [Releases](https://github.com/high-u/danmaku/releases/latest) からビルド済みバイナリを取得して `PATH` の通った場所に置く:
 
 ```
-curl -L -o danmaku https://github.com/high-u/danmaku/releases/latest/download/danmaku-linux-x86_64
+curl -L -o danmaku https://github.com/high-u/danmaku/releases/latest/download/danmaku-linux-x11-x86_64
 chmod +x danmaku
 mkdir -p ~/.local/bin && mv danmaku ~/.local/bin/
 ```
