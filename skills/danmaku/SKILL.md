@@ -16,15 +16,15 @@ description: PC 画面のスクリーンショットを撮って、その内容�
 
 ## 前提チェック（ループ開始前に 1 回だけ）
 
-次のコマンドを bash で実行する。
+次のコマンドを bash で実行する（`scripts/screenshot.sh` はこのスキルに同梱されたパス）。
 
 ```
-which getscreens
 which danmaku
 pgrep -x danmaku
+bash scripts/screenshot.sh --check
 ```
 
-3 つすべてが見つかれば（全て 0 終了）ループを開始する。1 つでも失敗したら、利用者に「`getscreens` / `danmaku` のビルドと `danmaku` (serve) の起動が必要です」と伝えて終了する。
+3 つすべてが 0 終了すればループを開始する。1 つでも失敗したら、利用者に「`danmaku` のビルドと `danmaku` (serve) の起動、およびスクショ依存コマンド（Linux: `maim` / `xrandr`、macOS: `screencapture`）が必要です」と伝えて終了する。
 
 ## 利用者指示の解釈
 
@@ -41,16 +41,16 @@ pgrep -x danmaku
 ### 1. スクリーンショットを撮ってパスを取得
 
 ```
-getscreens
+bash scripts/screenshot.sh
 ```
 
-stdout に JSON 配列が 1 行出力される。例:
+スクリプトが OS を判定して 1 枚撮り（Linux/X11 と macOS で内部分岐する）、stdout に PNG の絶対パスを 1 行だけ出力する。例:
 
-```json
-[{"screen":0,"path":"/run/user/1000/getscreens/0/20260516-120000.png","timestamp":"20260516-120000"}]
+```
+/run/user/1000/danmaku/20260516-120000.png
 ```
 
-配列の最初の要素の `path` を取り出して次のステップに渡す。
+この 1 行をそのまま次のステップに渡す。特定の画面を撮る場合は番号（0 始まり）を引数に付ける（例: `bash scripts/screenshot.sh 1`）。
 
 ### 2. スクリーンショットを読み込む
 
@@ -110,7 +110,7 @@ danmaku send "勉強熱心" "それ前も読んでなかった？"
 | 状況 | 対応 |
 |---|---|
 | 前提チェック失敗 | ループを開始しない |
-| `getscreens` が非ゼロ終了 | stderr を利用者に提示してループを停止 |
+| `scripts/screenshot.sh` が非ゼロ終了 | stderr を利用者に提示してループを停止 |
 | 画像読み込みに失敗 | エラー内容を利用者に提示してループを停止 |
 | `danmaku send` が非ゼロ終了 | stderr を利用者に提示してループを停止 |
 

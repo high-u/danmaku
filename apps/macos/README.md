@@ -33,8 +33,8 @@ which danmaku
 ```
 git clone https://github.com/high-u/danmaku.git
 cd danmaku
-cargo build --release --manifest-path apps/danmaku-macos/Cargo.toml
-mkdir -p ~/.local/bin && cp apps/danmaku-macos/target/release/danmaku ~/.local/bin/
+cargo build --release --manifest-path apps/macos/Cargo.toml
+mkdir -p ~/.local/bin && cp apps/macos/target/release/danmaku ~/.local/bin/
 ```
 
 ビルドには Rust ツールチェイン (`rustup` 経由の stable) と Xcode Command Line Tools

@@ -1,4 +1,4 @@
-# danmaku-linux 開発用イメージ。
+# danmaku-linux-x11 開発用イメージ。
 # 目的: macOS から「実 X11 ディスプレイ + 合成器」を VNC 越しに触り、
 #       透過オーバーレイ / クリックスルーの見た目まで確認できる環境を用意する。
 # ソースはイメージに焼かず compose 側でマウントする (ビルドはコンテナ内)。
@@ -6,7 +6,7 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# 1) GTK4 / cairo / pango など danmaku-linux のビルドに要る -dev 群
+# 1) GTK4 / cairo / pango など danmaku-linux-x11 のビルドに要る -dev 群
 # 2) X サーバ込みの TigerVNC (Xvnc) と、実デスクトップ環境 XFCE
 #    (xfwm4 の内蔵コンポジタで透過を賄うため picom は不要)
 # 3) Rust ツールチェインのビルドに要る最小限 (rustup は後段で導入)

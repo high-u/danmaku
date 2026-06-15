@@ -1,6 +1,6 @@
-# danmaku-linux 開発コンテナ (macOS 上)
+# danmaku-linux-x11 開発コンテナ (macOS 上)
 
-macOS 上の Docker で Ubuntu + XFCE デスクトップを動かし、VNC 越しに `danmaku-linux` の透過オーバーレイ / クリックスルーの挙動を確認するための環境。
+macOS 上の Docker で Ubuntu + XFCE デスクトップを動かし、VNC 越しに `danmaku-linux-x11` の透過オーバーレイ / クリックスルーの挙動を確認するための環境。
 
 ```text
 Ubuntu container
@@ -8,7 +8,7 @@ Ubuntu container
 Mac → 画面共有.app で vnc://localhost:5901
 ```
 
-- `danmaku-linux` は GTK4 + X11 依存。実 X ディスプレイと合成器が要るため、XFCE のデスクトップ環境上で動かす。
+- `danmaku-linux-x11` は GTK4 + X11 依存。実 X ディスプレイと合成器が要るため、XFCE のデスクトップ環境上で動かす。
 - VNC を使うのは macOS 標準の「画面共有」がそのまま VNC クライアントになるため。
 
 ## 前提
@@ -21,7 +21,7 @@ Mac → 画面共有.app で vnc://localhost:5901
 リポジトリのルートから:
 
 ```sh
-docker compose -f dev/linux-container/compose.yaml up -d --build
+docker compose -f dev/linux-container-for-macos/compose.yaml up -d --build
 ```
 
 `danmaku-dev: VNC ready on :5901` が出れば準備完了。
@@ -49,21 +49,21 @@ vnc://localhost:5901
 
 ```sh
 # 常駐を起動 (バックグラウンド)
-docker compose -f dev/linux-container/compose.yaml exec -d danmaku-dev \
-  cargo run --manifest-path apps/danmaku-linux/Cargo.toml -- serve
+docker compose -f dev/linux-container-for-macos/compose.yaml exec -d danmaku-dev \
+  cargo run --manifest-path apps/linux-x11/Cargo.toml -- serve
 
 # 弾幕を送る
-docker compose -f dev/linux-container/compose.yaml exec danmaku-dev \
-  cargo run --manifest-path apps/danmaku-linux/Cargo.toml -- send "ハロー" "テスト"
+docker compose -f dev/linux-container-for-macos/compose.yaml exec danmaku-dev \
+  cargo run --manifest-path apps/linux-x11/Cargo.toml -- send "ハロー" "テスト"
 
 # コードを変えたら serve を止めて起動し直す
-docker compose -f dev/linux-container/compose.yaml exec danmaku-dev pkill -x danmaku
+docker compose -f dev/linux-container-for-macos/compose.yaml exec danmaku-dev pkill -x danmaku
 ```
 
 毎回打つのが長いので、Mac の `~/.zshrc` にエイリアスを置くと短くなる。
 
 ```sh
-alias dk='docker compose -f /Users/p789/Github/danmaku/dev/linux-container/compose.yaml exec danmaku-dev cargo run --manifest-path apps/danmaku-linux/Cargo.toml --'
+alias dk='docker compose -f /Users/p789/Github/danmaku/dev/linux-container-for-macos/compose.yaml exec danmaku-dev cargo run --manifest-path apps/linux-x11/Cargo.toml --'
 # 以後:  dk serve   /   dk send "あ" "い"
 ```
 
@@ -71,7 +71,7 @@ alias dk='docker compose -f /Users/p789/Github/danmaku/dev/linux-container/compo
 
 コンテナに入って直接叩く。入り方は2通りで、どちらでもよい。
 
-- Mac の端末から `docker compose -f dev/linux-container/compose.yaml exec danmaku-dev bash`
+- Mac の端末から `docker compose -f dev/linux-container-for-macos/compose.yaml exec danmaku-dev bash`
 - 画面共有の XFCE デスクトップで、下のドックのターミナルを開く
 
 入った後の操作:
@@ -80,10 +80,10 @@ alias dk='docker compose -f /Users/p789/Github/danmaku/dev/linux-container/compo
 cd /workspace
 
 # 常駐
-cargo run --manifest-path apps/danmaku-linux/Cargo.toml -- serve &
+cargo run --manifest-path apps/linux-x11/Cargo.toml -- serve &
 
 # 弾幕を送る
-cargo run --manifest-path apps/danmaku-linux/Cargo.toml -- send "ハロー" "テスト"
+cargo run --manifest-path apps/linux-x11/Cargo.toml -- send "ハロー" "テスト"
 
 # コードを変えたら止めて起動し直す
 pkill -x danmaku
@@ -94,17 +94,17 @@ pkill -x danmaku
 PATH に通せば `cargo run ...` の代わりに `danmaku` で呼べる。コンテナ内で:
 
 ```sh
-cargo install --path apps/danmaku-linux   # ~/.cargo/bin/danmaku を生成
+cargo install --path apps/linux-x11   # ~/.cargo/bin/danmaku を生成
 danmaku serve &
 danmaku send "ハロー" "テスト"
 ```
 
-ソースを変えたら `cargo install --path apps/danmaku-linux` をやり直すと `danmaku` が更新される。`cargo install` で入れた `danmaku` はコンテナを作り直すと消えるので、再度 install する。
+ソースを変えたら `cargo install --path apps/linux-x11` をやり直すと `danmaku` が更新される。`cargo install` で入れた `danmaku` はコンテナを作り直すと消えるので、再度 install する。
 
 ## 後始末
 
 ```sh
-docker compose -f dev/linux-container/compose.yaml down
+docker compose -f dev/linux-container-for-macos/compose.yaml down
 ```
 
 `target/` と cargo キャッシュはボリュームに残るのでビルドはやり直しにならない。
