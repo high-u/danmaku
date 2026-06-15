@@ -19,6 +19,8 @@ use rand::seq::IteratorRandom;
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
 
+mod overlay_x11;
+
 const APP_ID: &str = "io.github.danmaku.gui";
 
 // デフォルト値。設定ファイル (~/.config/danmaku/config.toml) があれば上書きされる。
@@ -300,14 +302,13 @@ fn build_ui(
 
     window.connect_realize(|win| {
         let Some(surface) = win.surface() else { return };
-        let region = cairo::Region::create();
-        surface.set_input_region(Some(&region));
-        set_x11_initial_wm_state(&surface);
+        make_click_through(&surface);
+        overlay_x11::declare_overlay_states(&surface);
     });
 
     window.connect_map(move |win| {
         let Some(surface) = win.surface() else { return };
-        send_x11_state_change_above(&surface);
+        overlay_x11::reassert_overlay_states(&surface);
         move_to_monitor_center(&surface, screen);
     });
 
@@ -537,85 +538,14 @@ fn process_line(line: &str, state: &Rc<RefCell<DanmakuState>>) {
     st.last_activity = Instant::now();
 }
 
-fn x11_handles(surface: &gdk::Surface) -> Option<(*mut x11::xlib::Display, x11::xlib::Window)> {
-    use gdk4_x11::X11Display;
-    use glib::translate::ToGlibPtr;
-
-    let x11_surface = surface.downcast_ref::<gdk4_x11::X11Surface>()?;
-    let x11_display = x11_surface.display().downcast_ref::<X11Display>().cloned()?;
-    unsafe {
-        let xdisplay =
-            gdk4_x11::ffi::gdk_x11_display_get_xdisplay(x11_display.to_glib_none().0)
-                as *mut x11::xlib::Display;
-        let xid = gdk4_x11::ffi::gdk_x11_surface_get_xid(x11_surface.to_glib_none().0)
-            as x11::xlib::Window;
-        Some((xdisplay, xid))
-    }
-}
-
-fn set_x11_initial_wm_state(surface: &gdk::Surface) {
-    let Some((xdisplay, xid)) = x11_handles(surface) else {
-        eprintln!("not an X11 surface/display");
-        return;
-    };
-    unsafe {
-        let wm_state = atom(xdisplay, "_NET_WM_STATE");
-        let above = atom(xdisplay, "_NET_WM_STATE_ABOVE");
-        let sticky = atom(xdisplay, "_NET_WM_STATE_STICKY");
-        let skip_taskbar = atom(xdisplay, "_NET_WM_STATE_SKIP_TASKBAR");
-        let skip_pager = atom(xdisplay, "_NET_WM_STATE_SKIP_PAGER");
-
-        let states = [above, sticky, skip_taskbar, skip_pager];
-        x11::xlib::XChangeProperty(
-            xdisplay,
-            xid,
-            wm_state,
-            x11::xlib::XA_ATOM,
-            32,
-            x11::xlib::PropModeReplace,
-            states.as_ptr() as *const u8,
-            states.len() as i32,
-        );
-    }
-}
-
-// EWMH ar01s05: マップ済みウィンドウの _NET_WM_STATE 変更は
-// ルートウィンドウ宛て ClientMessage を SubstructureRedirect/Notify Mask で送る。
-fn send_x11_state_change_above(surface: &gdk::Surface) {
-    let Some((xdisplay, xid)) = x11_handles(surface) else { return };
-    unsafe {
-        let wm_state = atom(xdisplay, "_NET_WM_STATE");
-        let above = atom(xdisplay, "_NET_WM_STATE_ABOVE");
-        let root = x11::xlib::XDefaultRootWindow(xdisplay);
-
-        let mut data = x11::xlib::ClientMessageData::new();
-        data.set_long(0, 1); // _NET_WM_STATE_ADD
-        data.set_long(1, above as i64);
-        data.set_long(2, 0);
-        data.set_long(3, 1); // source: normal application
-        data.set_long(4, 0);
-
-        let mut event = x11::xlib::XEvent {
-            client_message: x11::xlib::XClientMessageEvent {
-                type_: x11::xlib::ClientMessage,
-                serial: 0,
-                send_event: 0,
-                display: xdisplay,
-                window: xid,
-                message_type: wm_state,
-                format: 32,
-                data,
-            },
-        };
-
-        x11::xlib::XSendEvent(
-            xdisplay,
-            root,
-            0,
-            x11::xlib::SubstructureRedirectMask | x11::xlib::SubstructureNotifyMask,
-            &mut event,
-        );
-    }
+// ウィンドウをクリックスルー (入力を背後のウィンドウへ素通り) にする。
+// 入力領域を空に設定する GDK の手段。X11/Wayland 双方で WM・コンポジタが
+// 入力を背後へ流す。GTK4 に「クリックスルー」を表す上位 API は無く
+// (`set_can_target` はアプリ内のイベント配送制御で、別ウィンドウへの素通りは
+// しない。確認済み)、GDK の入力領域指定が最も高い適切なレイヤー。
+fn make_click_through(surface: &gdk::Surface) {
+    let empty = cairo::Region::create();
+    surface.set_input_region(Some(&empty));
 }
 
 // 指定された screen 番号 (gdk::Display::monitors() のインデックス) のモニタを取得する。
@@ -628,9 +558,6 @@ fn monitor_for_screen(screen: u32) -> Option<gdk::Monitor> {
 
 // マップ後にウィンドウをモニタ中央 (縦方向) へ移動する。
 fn move_to_monitor_center(surface: &gdk::Surface, screen: u32) {
-    let Some((xdisplay, xid)) = x11_handles(surface) else {
-        return;
-    };
     let Some(monitor) = monitor_for_screen(screen) else {
         return;
     };
@@ -638,12 +565,5 @@ fn move_to_monitor_center(surface: &gdk::Surface, screen: u32) {
     let h = (geom.height() as f64 * 0.75) as i32;
     let x = geom.x();
     let y = geom.y() + (geom.height() - h) / 2;
-    unsafe {
-        x11::xlib::XMoveWindow(xdisplay, xid, x, y);
-    }
-}
-
-unsafe fn atom(d: *mut x11::xlib::Display, name: &str) -> x11::xlib::Atom {
-    let c = std::ffi::CString::new(name).unwrap();
-    unsafe { x11::xlib::XInternAtom(d, c.as_ptr(), 0) }
+    overlay_x11::move_window_to(surface, x, y);
 }
